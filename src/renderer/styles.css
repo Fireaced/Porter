@@ -112,7 +112,8 @@ input { font: inherit; color: inherit; }
 /* ---------- Lector ---------- */
 #reader { position: fixed; inset: 0; background: #000; z-index: 20; }
 #stage { position: absolute; inset: 0; outline: none; overflow: auto; }
-#stage.paged { overflow: hidden; }
+#stage.paged { overflow: hidden; touch-action: none; }
+#stage .layer { touch-action: none; }
 /* Cada página/doble vive en su propia capa ya decodificada; solo la actual es visible */
 #stage .layer { position: absolute; inset: 0; overflow: auto; display: flex; visibility: hidden; pointer-events: none; }
 #stage .layer.cur { visibility: visible; pointer-events: auto; z-index: 1; }
@@ -176,3 +177,13 @@ pre.info { background: #101012; border: 1px solid var(--line); border-radius: 8p
   white-space: pre-wrap; word-break: break-word; color: var(--muted); user-select: text; margin: 8px 0 0; }
 .err { color: #ff9b9b; font-size: 12.5px; margin-top: 10px; }
 #modal { z-index: 80; }
+
+/* ---------- Emparejado ---------- */
+.dialog.pair { text-align: center; }
+.dialog.pair .qr { width: 260px; height: 260px; border-radius: 12px; background: #fff; padding: 6px; margin: 8px auto; display: block; image-rendering: pixelated; }
+.dialog .hint { color: var(--muted); font-size: 12.5px; }
+.nocam { text-align: left; margin-top: 14px; background: var(--surface-2); border-radius: 10px; padding: 10px 14px; font-size: 13px; }
+.nocam summary { cursor: pointer; font-weight: 600; }
+.nocam ol { padding-left: 18px; margin: 10px 0 2px; display: grid; gap: 6px; }
+.nocam code, .dialog code { background: #101012; padding: 1px 6px; border-radius: 5px; user-select: text; }
+.sas { font-size: 44px; font-weight: 750; letter-spacing: 6px; font-variant-numeric: tabular-nums; margin: 10px 0 18px; color: var(--accent); }

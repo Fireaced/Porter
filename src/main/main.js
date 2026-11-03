@@ -6,7 +6,8 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { Store } = require('./store');
 const { Library } = require('./library');
-const { BookCache, readFirstPage } = require('./archives');
+const { BookCache, readFirstPage, naturalSort } = require('./archives');
+const { SyncServer } = require('./sync-server');
 const report = require('./report');
 
 process.on('uncaughtException', (e) => { report.logError('main', e && e.stack || e); console.error(e); });
@@ -23,7 +24,7 @@ protocol.registerSchemesAsPrivileged([{
 if (process.env.PORTER_USER_DATA) app.setPath('userData', process.env.PORTER_USER_DATA);
 if (!app.requestSingleInstanceLock()) app.quit();
 
-let win, store, library, books;
+let win, store, library, books, sync;
 const ROOT = path.join(__dirname, '..', '..');
 const RENDERER = path.join(ROOT, 'src', 'renderer');
 const PDFJS = path.join(ROOT, 'node_modules', 'pdfjs-dist', 'build');
@@ -194,8 +195,28 @@ function registerIpc() {
     return snapshot();
   });
 
-  ipcMain.handle('history:remove', (_e, fp) => { delete store.data.history[fp]; store.save(); return snapshot(); });
-  ipcMain.handle('history:clear', () => { store.data.history = {}; store.save(); return snapshot(); });
+  // Los borrados se recuerdan (lápidas) para que también desaparezcan en el móvil al sincronizar
+  ipcMain.handle('history:remove', (_e, fp) => {
+    delete store.data.history[fp];
+    store.data.historyDeleted = { ...(store.data.historyDeleted || {}), [fp]: Date.now() };
+    store.save(); return snapshot();
+  });
+  ipcMain.handle('history:clear', () => {
+    const now = Date.now();
+    store.data.historyDeleted = { ...(store.data.historyDeleted || {}) };
+    for (const fp of Object.keys(store.data.history)) store.data.historyDeleted[fp] = now;
+    store.data.history = {}; store.save(); return snapshot();
+  });
+
+  // Móviles y tablets
+  ipcMain.handle('sync:devices', () => ({ devices: sync.devicesList(), name: sync.pcName(), running: !!sync.server, port: sync.port, addresses: sync.addresses() }));
+  ipcMain.handle('sync:openPairing', async () => {
+    try { return await sync.openPairing(); } catch (e) { return { error: e.message }; }
+  });
+  ipcMain.handle('sync:closePairing', () => sync.closePairing());
+  ipcMain.handle('sync:answer', (_e, session, accept) => sync.answerSas(session, accept));
+  ipcMain.handle('sync:remove', (_e, id) => { sync.removeDevice(id); return sync.devicesList(); });
+  ipcMain.handle('sync:send', (_e, fps) => { sync.queueForDevices(fps); return sync.devicesList(); });
 
   ipcMain.handle('cover:has', (_e, fp) => fs.existsSync(path.join(COVERS, path.basename(fp) + '.webp')));
   ipcMain.handle('cover:save', async (_e, fp, buf) => {
@@ -232,6 +253,13 @@ app.whenReady().then(async () => {
   library = new Library(store, () => send('library:changed', snapshot()));
 
   registerProtocol();
+  sync = new SyncServer({
+    store, books, readFirstPage, coversDir: COVERS, rarCache: RARCACHE, naturalCompare: naturalSort,
+    onChange: () => send('library:changed', snapshot()),
+    onPairRequest: (r) => send('sync:pair-request', r),
+    onPaired: (name) => send('sync:paired', name),
+  });
+  sync.init().catch((e) => report.logError('sync', e.stack || e));
   registerIpc();
   createWindow();
 

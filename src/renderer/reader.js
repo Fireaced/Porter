@@ -551,32 +551,93 @@ export class Reader {
     }, { passive: true });
 
     // Arrastrar para desplazar cuando la página no cabe (zoom / 100% / ancho)
+    // Ratón y táctil: arrastrar para mover, deslizar para pasar página, doble toque para zoom,
+    // pellizcar para hacer zoom (táctil) y toques en los laterales para pasar página.
     let drag = null;
+    const pointers = new Map();
+    let pinch = null;
+    let lastTap = null, tapTimer = null;
     st.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2 && this.mode !== 'vertical') {
+        const [a, b] = [...pointers.values()];
+        pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), ratio: 1, el: this.scroller() };
+        drag = null;
+        return;
+      }
       const sc = this.scroller();
-      drag = { sc, x: e.clientX, y: e.clientY, sl: sc.scrollLeft, stp: sc.scrollTop, moved: false };
+      drag = { sc, x: e.clientX, y: e.clientY, dx: 0, dy: 0, sl: sc.scrollLeft, stp: sc.scrollTop, moved: false, t: performance.now(), type: e.pointerType };
     });
     window.addEventListener('pointermove', (e) => {
+      if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pointers.size >= 2) {
+        const [a, b] = [...pointers.values()];
+        pinch.ratio = Math.max(0.5, Math.min(4, Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0));
+        const inner = pinch.el.firstElementChild;
+        if (inner) { inner.style.transform = `scale(${pinch.ratio})`; inner.style.transformOrigin = 'center'; }
+        return;
+      }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      if (!drag.moved && Math.hypot(dx, dy) > 5) {
+      drag.dx = dx; drag.dy = dy;
+      if (!drag.moved && Math.hypot(dx, dy) > 8) {
         drag.moved = true; st.classList.add('grabbing');
         try { st.setPointerCapture(e.pointerId); } catch (_) {}
       }
-      if (drag.moved) { drag.sc.scrollLeft = drag.sl - dx; drag.sc.scrollTop = drag.stp - dy; }
+      if (drag.moved && drag.type === 'mouse' || (drag.moved && this.mode !== 'vertical')) {
+        drag.sc.scrollLeft = drag.sl - dx; drag.sc.scrollTop = drag.stp - dy;
+      }
     });
-    window.addEventListener('pointerup', (e) => {
+    const endPointer = (e) => {
+      pointers.delete(e.pointerId);
+      if (pinch) {
+        if (pointers.size < 2) {
+          const inner = pinch.el.firstElementChild;
+          if (inner) inner.style.transform = '';
+          const r = pinch.ratio; pinch = null;
+          if (Math.abs(r - 1) > 0.05) this.rezoom(this.zoom * r);
+        }
+        return;
+      }
       if (!drag) return;
-      const wasDrag = drag.moved; drag = null; st.classList.remove('grabbing');
-      if (wasDrag || !this.isOpen || e.target.closest('.r-bar')) return;
-      if (!e.target.closest('#stage')) return;
+      const d = drag; drag = null; st.classList.remove('grabbing');
+      if (e.type === 'pointercancel' || !this.isOpen || e.target.closest?.('.r-bar')) return;
+      if (d.moved) {
+        // Deslizar para pasar página (si la página cabe a lo ancho)
+        const fitsX = d.sc.scrollWidth <= d.sc.clientWidth + 2;
+        const fast = performance.now() - d.t < 600;
+        if (this.mode !== 'vertical' && fitsX && fast && Math.abs(d.dx) > 50 && Math.abs(d.dx) > Math.abs(d.dy) * 1.4) {
+          const towardsNext = this.mode === 'manga' ? d.dx > 0 : d.dx < 0;
+          towardsNext ? this.next() : this.prev();
+        }
+        return;
+      }
+      if (!e.target.closest?.('#stage')) return;
       const x = e.clientX / window.innerWidth;
-      if (this.mode === 'vertical') { if (x > 0.3 && x < 0.7) this.toggleChrome(); return; }
-      if (x < 0.3) this.mode === 'manga' ? this.next() : this.prev();
-      else if (x > 0.7) this.mode === 'manga' ? this.prev() : this.next();
-      else this.toggleChrome();
-    });
+      const act = () => {
+        if (this.mode === 'vertical') { if (x > 0.3 && x < 0.7) this.toggleChrome(); return; }
+        if (x < 0.3) this.mode === 'manga' ? this.next() : this.prev();
+        else if (x > 0.7) this.mode === 'manga' ? this.prev() : this.next();
+        else this.toggleChrome();
+      };
+      // En táctil, el doble toque hace zoom; el toque simple espera un instante
+      if (d.type === 'touch') {
+        const now = performance.now();
+        if (lastTap && now - lastTap.t < 280 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+          clearTimeout(tapTimer); lastTap = null;
+          this.rezoom(this.zoom > 1.05 ? 1 : 2);
+          return;
+        }
+        lastTap = { t: now, x: e.clientX, y: e.clientY };
+        clearTimeout(tapTimer);
+        tapTimer = setTimeout(() => { lastTap = null; act(); }, 260);
+        return;
+      }
+      act();
+    };
+    window.addEventListener('pointerup', endPointer);
+    window.addEventListener('pointercancel', endPointer);
 
     let wheelLock = 0;
     st.addEventListener('wheel', (e) => {

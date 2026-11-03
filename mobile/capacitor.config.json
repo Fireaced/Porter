@@ -1,0 +1,13 @@
+{
+  "appId": "io.github.fireaced.porter",
+  "appName": "Porter",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#111113"
+  }
+}

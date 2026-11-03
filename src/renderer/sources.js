@@ -1,15 +1,24 @@
 // Fuentes de páginas: imágenes (CBZ/CBR) y PDF.
 // Interfaz común: count, dims(i) -> {w,h}, element(i, cssW, cssH) -> nodo listo, release()
 
+// Plataforma: Electron usa el protocolo porter://; Android aporta sus propias funciones en window.porter
+const PF = () => window.porter || {};
+const PDFJS_BASE = () => PF().pdfjsBase || 'porter://app/pdfjs/';
+
 let pdfjsPromise = null;
 function pdfjs() {
   if (!pdfjsPromise) {
-    pdfjsPromise = import('porter://app/pdfjs/pdf.min.mjs').then((m) => {
-      m.GlobalWorkerOptions.workerSrc = 'porter://app/pdfjs/pdf.worker.min.mjs';
+    pdfjsPromise = import(/* @vite-ignore */ PDFJS_BASE() + 'pdf.min.mjs').then((m) => {
+      m.GlobalWorkerOptions.workerSrc = PDFJS_BASE() + 'pdf.worker.min.mjs';
       return m;
     });
   }
   return pdfjsPromise;
+}
+
+async function pdfParams(bookId) {
+  const src = PF().pdfSource ? await PF().pdfSource(bookId) : { url: `porter://file/${bookId}` };
+  return { ...src, isEvalSupported: false, enableXfa: false };
 }
 
 class LRU {
@@ -60,7 +69,8 @@ export class ImageSource {
     if (i < 0 || i >= this.count) return Promise.reject(new Error('rango'));
     let p = this.blobs.get(i);
     if (!p) {
-      p = fetch(this.url(i)).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); });
+      p = PF().pageBlob ? PF().pageBlob(this.id, i)
+        : fetch(this.url(i)).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); });
       this.blobs.set(i, p);
       p.catch(() => this.blobs.map.delete(i));
     }
@@ -120,12 +130,7 @@ export class ImageSource {
 export class PdfSource {
   static async open(bookId) {
     const lib = await pdfjs();
-    const doc = await lib.getDocument({
-      url: `porter://file/${bookId}`,
-      disableAutoFetch: false,
-      isEvalSupported: false,
-      enableXfa: false,
-    }).promise;
+    const doc = await lib.getDocument(await pdfParams(bookId)).promise;
     return new PdfSource(doc);
   }
   constructor(doc) {
@@ -184,7 +189,7 @@ export async function makeCover(book) {
   let bitmap;
   if (book.ext === 'pdf') {
     const lib = await pdfjs();
-    const doc = await lib.getDocument({ url: `porter://file/${book.id}`, isEvalSupported: false }).promise;
+    const doc = await lib.getDocument(await pdfParams(book.id)).promise;
     try {
       const page = await doc.getPage(1);
       const base = page.getViewport({ scale: 1 });
@@ -198,9 +203,13 @@ export async function makeCover(book) {
       window.porter.setPages(book.id, doc.numPages);
     } finally { doc.destroy(); }
   } else {
-    const r = await fetch(`porter://thumb/${book.id}`);
-    if (!r.ok) throw new Error('sin portada');
-    const blob = await r.blob();
+    let blob;
+    if (PF().thumbBlob) blob = await PF().thumbBlob(book);
+    else {
+      const r = await fetch(`porter://thumb/${book.id}`);
+      if (!r.ok) throw new Error('sin portada');
+      blob = await r.blob();
+    }
     const full = await createImageBitmap(blob);
     // Si la primera página es una doble (apaisada), usar la mitad derecha como portada
     let sx = 0, sw = full.width;

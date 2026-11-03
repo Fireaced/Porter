@@ -15,6 +15,7 @@ class App {
     this.coverQueue = [];
     this.coverBusy = 0;
     this.coverFailed = new Set();
+    this.ext = window.porterExt ? window.porterExt(this) : null;
     this.reader = new Reader(this);
     this.content = $('#content');
     this.coverIO = new IntersectionObserver((ents) => {
@@ -31,8 +32,19 @@ class App {
   }
 
   async init() {
+    if (window.porter.onPairRequest) {
+      window.porter.onPairRequest((r) => this.showPairRequest(r));
+      window.porter.onPaired((name) => {
+        this.pairing = false;
+        $('#modal').hidden = true;
+        this.toast(`${name} emparejado. Ya se sincronizará solo en tu Wi‑Fi.`);
+        this.deviceCount = (this.deviceCount || 0) + 1;
+      });
+      window.porter.syncDevices().then((i) => { this.deviceCount = i.devices.length; });
+    }
     this.setState(await window.porter.getLibrary());
     window.porter.onLibrary((d) => { this.setState(d); });
+    this.ext?.init?.();
   }
 
   setState(d) {
@@ -74,7 +86,7 @@ class App {
   }
 
   // ---------- Portadas ----------
-  coverURL(fp) { return `porter://cover/${fp}?v=${this.covers.has(fp) ? 1 : 0}`; }
+  coverURL(fp) { return window.porter.coverURL ? window.porter.coverURL(fp) : `porter://cover/${fp}`; }
 
   enqueueCover(b) {
     if (this.coverFailed.has(b.fp) || this.coverQueue.some((x) => x.fp === b.fp)) return;
@@ -98,7 +110,7 @@ class App {
   fillCover(el, fp) {
     const img = new Image();
     img.decoding = 'async'; img.loading = 'lazy'; img.alt = '';
-    img.src = `porter://cover/${fp}?t=${Date.now()}`;
+    img.src = this.coverURL(fp) + (this.coverURL(fp).startsWith('blob:') ? '' : `?t=${Date.now()}`);
     el.querySelector('.ph')?.remove();
     el.querySelector('img')?.remove();
     el.prepend(img);
@@ -106,14 +118,16 @@ class App {
 
   coverHTML(fp, title, extra = '') {
     const has = this.covers.has(fp);
-    return `<div class="cover" data-fp="${fp}">${has ? `<img loading="lazy" decoding="async" alt="" src="porter://cover/${fp}">` : `<div class="ph">${esc(title)}</div>`}${extra}</div>`;
+    return `<div class="cover" data-fp="${fp}">${has ? `<img loading="lazy" decoding="async" alt="" src="${this.coverURL(fp)}">` : `<div class="ph">${esc(title)}</div>`}${extra}</div>`;
   }
 
   // ---------- Vistas ----------
   render() {
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === this.view));
+    document.body.dataset.view = this.view;
     const scroll = this.content.scrollTop;
     if (this.view === 'history') this.renderHistory();
+    else if (this.view !== 'library' && this.ext?.renderView) this.ext.renderView(this.view);
     else if (this.series) this.renderSeries(this.series);
     else this.renderLibrary();
     if (this._keepScroll) this.content.scrollTop = scroll;
@@ -141,7 +155,11 @@ class App {
   renderLibrary() {
     const q = this.query.trim().toLowerCase();
     const books = this.booksArr();
-    if (!this.state.folders.length) {
+    if (this.ext?.emptyLibraryHTML && !books.length && !q) {
+      this.content.innerHTML = this.ext.emptyLibraryHTML();
+      return;
+    }
+    if (!this.ext && !this.state.folders.length) {
       this.content.innerHTML = `<div class="empty"><h3>Tu biblioteca está vacía</h3>
         <p>Añade la carpeta donde guardas tus mangas y libros (CBZ, CBR, ZIP, RAR o PDF). Porter la vigilará y añadirá solo lo nuevo.</p>
         <button class="btn" data-act="add">+ Añadir carpeta</button></div>`;
@@ -156,6 +174,7 @@ class App {
       if (cont.length) {
         html += `<div class="section-h"><h2>Continuar leyendo</h2></div><div class="row">${cont.map((b) => this.bookCard(b, `${b.series !== b.title ? b.series + ' · ' : ''}${this.pct(b)}%`)).join('')}</div>`;
       }
+      if (this.ext?.extraLibraryHTML) html += this.ext.extraLibraryHTML();
     }
     const sm = this.seriesMap();
     let names = [...sm.keys()].sort(collator.compare);
@@ -222,9 +241,10 @@ class App {
       const gone = !book;
       const prog = h.finished ? `<span class="pill done">Terminado</span>` : h.total ? `<span class="p">Pág. ${(h.page || 0) + 1}</span> de ${h.total}` : 'Abierto';
       const time = new Date(h.lastRead).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-      html += `<div class="hrow ${gone ? 'gone' : ''}" ${book ? `data-open="${book.id}"` : ''} data-fp="${h.fp}" title="${esc(h.path || '')}">
-        <div class="hcover">${this.covers.has(h.fp) ? `<img loading="lazy" alt="" src="porter://cover/${h.fp}">` : ''}</div>
-        <div class="hmain"><div class="t">${esc(h.title)}${gone ? '<span class="pill gone">Archivo no disponible</span>' : ''}</div>
+      const remote = gone && this.ext?.isRemote?.(h.fp);
+      html += `<div class="hrow ${gone && !remote ? 'gone' : ''}" ${book ? `data-open="${book.id}"` : remote ? `data-remote="${h.fp}"` : ''} data-fp="${h.fp}" title="${esc(h.path || '')}">
+        <div class="hcover">${this.covers.has(h.fp) ? `<img loading="lazy" alt="" src="${this.coverURL(h.fp)}">` : ''}</div>
+        <div class="hmain"><div class="t">${esc(h.title)}${gone ? (this.ext?.historyBadge ? this.ext.historyBadge(h) : '<span class="pill gone">Archivo no disponible</span>') : ''}</div>
           <div class="s">${esc(h.series !== h.title ? h.series : '')}${h.series !== h.title ? ' · ' : ''}${esc((h.ext || '').toUpperCase())}</div></div>
         <div class="hstate">${prog}<div>${time}</div></div>
         <button class="icon-btn" data-remove-hist="${h.fp}" title="Quitar del historial">✕</button>
@@ -244,6 +264,7 @@ class App {
   }
 
   onReaderClosed() {
+    this.ext?.onReaderClosed?.();
     this._keepScroll = true;
     window.porter.getLibrary().then((d) => { this._keepScroll = true; this.setState(d); });
   }
@@ -320,9 +341,12 @@ class App {
     const m = $('#modal');
     m.innerHTML = `<div class="dialog">
       <h3>Ajustes</h3>
-      <h4>Carpetas vigiladas</h4>
+      ${this.ext?.settingsHTML ? this.ext.settingsHTML() : `<h4>Carpetas vigiladas</h4>
       <div id="folders">${this.state.folders.map((f) => `<div class="folder"><span title="${esc(f)}">${esc(f)}</span><button class="icon-btn" data-rmfolder="${esc(f)}" title="Quitar">✕</button></div>`).join('') || '<p style="color:var(--muted)">Ninguna todavía.</p>'}</div>
       <div class="actions"><button class="btn" data-act="add">+ Añadir carpeta</button><button class="btn ghost" data-act="rescan">Volver a escanear</button></div>
+      <h4>Móviles y tablets</h4>
+      <div id="devices"><p style="color:var(--muted)">Cargando…</p></div>
+      <div class="actions"><button class="btn" data-act="pair">Emparejar un móvil o tablet</button></div>`}
       <h4>Lectura por defecto</h4>
       <div class="actions seg" style="display:inline-flex">
         ${[['manga', 'Manga (der. → izq.)'], ['ltr', 'Normal (izq. → der.)'], ['vertical', 'Vertical']].map(([k, l]) => `<button data-defmode="${k}" class="${s.readMode === k ? 'on' : ''}">${l}</button>`).join('')}
@@ -340,6 +364,65 @@ class App {
       <div class="foot"><button class="btn ghost" data-act="close-modal">Cerrar</button></div>
     </div>`;
     m.hidden = false;
+    if (window.porter.syncDevices) this.renderDevices();
+    this.ext?.afterSettings?.();
+  }
+
+  // ---------- Móviles emparejados (PC) ----------
+  async renderDevices() {
+    const box = $('#devices');
+    if (!box) return;
+    const info = await window.porter.syncDevices();
+    this.deviceCount = info.devices.length;
+    const ago = (t) => {
+      if (!t) return 'nunca';
+      const m = Math.round((Date.now() - t) / 60000);
+      if (m < 2) return 'ahora mismo';
+      if (m < 60) return `hace ${m} min`;
+      if (m < 1440) return `hace ${Math.round(m / 60)} h`;
+      return new Date(t).toLocaleDateString('es-ES');
+    };
+    box.innerHTML = info.devices.length ? info.devices.map((d) => `<div class="folder"><span>📱 ${esc(d.name)} <span style="color:var(--muted)">· última sincronización ${ago(d.lastSeen)}${d.pending ? ` · ${d.pending} pendiente${d.pending > 1 ? 's' : ''} de enviar` : ''}</span></span>
+      <button class="icon-btn" data-rmdevice="${esc(d.id)}" title="Desemparejar">✕</button></div>`).join('')
+      : '<p style="color:var(--muted);font-size:13px">Ninguno todavía. Empareja tu móvil para sincronizar el progreso y pasarle mangas por la Wi‑Fi de casa.</p>';
+  }
+
+  async pairDialog() {
+    const m = $('#modal');
+    m.innerHTML = `<div class="dialog" style="text-align:center"><h3>Emparejar un móvil o tablet</h3><p style="color:var(--muted)">Preparando…</p></div>`;
+    m.hidden = false;
+    const r = await window.porter.openPairing();
+    if (r.error) { m.innerHTML = `<div class="dialog"><h3>No se pudo emparejar</h3><p class="err">${esc(r.error)}</p><div class="foot"><button class="btn ghost" data-act="close-pair">Cerrar</button></div></div>`; return; }
+    this.pairing = true;
+    m.innerHTML = `<div class="dialog pair">
+      <h3>Emparejar un móvil o tablet</h3>
+      <div id="pair-main">
+        <p>En Porter para Android, pulsa <b>Escanear QR</b> y apunta a este código:</p>
+        <img class="qr" src="${r.qr}" alt="Código QR de emparejado">
+        <p class="hint">El móvil y este PC tienen que estar en la misma Wi‑Fi. El código caduca en 10 minutos.</p>
+        <details class="nocam"><summary>¿La tablet no tiene cámara o no lee el QR?</summary>
+          <ol>
+            <li>En la tablet pulsa <b>Emparejar sin cámara</b>. Buscará este PC («${esc(r.name)}») en la Wi‑Fi.</li>
+            <li>Si no lo encuentra, escribe esta dirección: ${r.addresses.map((a) => `<code>${esc(a)}:${r.port}</code>`).join(' o ') || '<i>no se detectó ninguna red</i>'}</li>
+            <li>Aparecerá aquí un número de 6 cifras. Comprueba que es el mismo que ves en la tablet y pulsa <b>Coinciden</b>.</li>
+          </ol>
+        </details>
+      </div>
+      <div id="pair-req" hidden></div>
+      <div class="foot"><button class="btn ghost" data-act="close-pair">Cerrar</button></div>
+    </div>`;
+    if (this._pendingPair) { this.showPairRequest(this._pendingPair); this._pendingPair = null; }
+  }
+
+  showPairRequest(r) {
+    const box = $('#pair-req');
+    if (!box || $('#modal').hidden) { this._pendingPair = r; return this.pairDialog(); }
+    $('#pair-main').hidden = true;
+    box.hidden = false;
+    box.innerHTML = `<p><b>${esc(r.name)}</b> quiere emparejarse con este PC.</p>
+      <p class="hint">Comprueba que en su pantalla aparece el mismo número:</p>
+      <div class="sas">${esc(r.code)}</div>
+      <div class="actions" style="justify-content:center"><button class="btn danger" data-sas="no" data-session="${esc(r.session)}">No coinciden</button><button class="btn" data-sas="yes" data-session="${esc(r.session)}">Coinciden</button></div>`;
   }
 
   contextMenu(e, book) {
@@ -349,7 +432,8 @@ class App {
     c.innerHTML = `<button data-c="open">Abrir</button>
       ${p ? '<button data-c="reset">Marcar como no leído</button>' : ''}
       ${!p?.finished ? '<button data-c="done">Marcar como leído</button>' : ''}
-      <button data-c="reveal">Mostrar en la carpeta</button>`;
+      ${this.deviceCount ? '<button data-c="phone">Enviar al móvil</button>' : ''}
+      ${this.ext?.contextItems ? this.ext.contextItems(book) : '<button data-c="reveal">Mostrar en la carpeta</button>'}`;
     c.style.left = Math.min(e.clientX, innerWidth - 200) + 'px';
     c.style.top = Math.min(e.clientY, innerHeight - 150) + 'px';
     c.hidden = false;
@@ -357,6 +441,8 @@ class App {
       const a = ev.target.dataset.c; c.hidden = true;
       if (a === 'open') this.openBook(book.id);
       if (a === 'reveal') window.porter.reveal(book.id);
+      if (a === 'phone') { await window.porter.sendToPhone([book.fp]); this.toast('Se enviará al móvil la próxima vez que se sincronice'); }
+      if (this.ext?.contextAction) this.ext.contextAction(a, book);
       if (a === 'reset') { this._keepScroll = true; this.setState(await window.porter.resetProgress(book.fp)); }
       if (a === 'done') {
         const total = book.pages || 1;
@@ -381,9 +467,21 @@ class App {
       const act = t.closest('[data-act]')?.dataset.act;
       if (act === 'add') { $('#modal').hidden = true; return this.addFolder(); }
       if (act === 'report') return this.reportDialog();
+      if (act === 'pair') return this.pairDialog();
+      if (act === 'close-pair') { this.pairing = false; window.porter.closePairing(); $('#modal').hidden = true; return; }
+      const sas = t.closest('[data-sas]');
+      if (sas) {
+        const ok = sas.dataset.sas === 'yes';
+        await window.porter.answerPairing(sas.dataset.session, ok);
+        if (!ok) { this.toast('Emparejado cancelado'); this.pairing = false; window.porter.closePairing(); $('#modal').hidden = true; }
+        return;
+      }
+      const rmd = t.closest('[data-rmdevice]')?.dataset.rmdevice;
+      if (rmd) { if (confirm('¿Desemparejar este dispositivo? Tendrás que volver a emparejarlo para sincronizar.')) { await window.porter.removeDevice(rmd); this.renderDevices(); } return; }
+      if (this.ext?.action && await this.ext.action(act, t, e)) return;
       if (act === 'back') { this.series = null; this.render(); return; }
       if (act === 'rescan') { this.toast('Escaneando…'); this.setState(await window.porter.rescan()); this.toast('Biblioteca actualizada'); return this.settings(); }
-      if (act === 'close-modal' || t.id === 'modal') { $('#modal').hidden = true; return; }
+      if (act === 'close-modal' || (t.id === 'modal' && !this.pairing)) { $('#modal').hidden = true; return; }
       if (act === 'clear-history') {
         if (confirm('¿Borrar todo el historial de lectura? El progreso de cada libro se mantiene.')) this.setState(await window.porter.clearHistory());
         $('#modal').hidden = true; return;
@@ -415,7 +513,7 @@ class App {
     document.addEventListener('keydown', (e) => {
       if (this.reader.isOpen || e.defaultPrevented) return;
       if (e.key === 'Escape') {
-        if (!$('#modal').hidden) $('#modal').hidden = true;
+        if (!$('#modal').hidden) { if (this.pairing) { this.pairing = false; window.porter.closePairing(); } $('#modal').hidden = true; }
         else if (this.series) { this.series = null; this.render(); }
       }
       if ((e.ctrlKey && e.key === 'f') || (e.key === '/' && document.activeElement.tagName !== 'INPUT')) { e.preventDefault(); $('#search').focus(); }

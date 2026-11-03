@@ -29,6 +29,20 @@ Para instalar sin firmar: `powershell -ExecutionPolicy Bypass -File .\instalar-p
 
 También puedes descomprimir el zip y abrir `Porter.exe` directamente. En ese caso, como el ejecutable no está firmado por una autoridad reconocida, SmartScreen avisará la primera vez: «Más información» → «Ejecutar de todas formas».
 
+## Porter para Android
+Descarga el APK `Porter-x.y.z.apk` desde **[Releases](https://github.com/Fireaced/Porter/releases/latest)** e instálalo. Android te pedirá permitir la instalación desde el navegador o el gestor de archivos la primera vez.
+
+- **Misma interfaz y lector** que en el PC, con gestos: deslizar para pasar página (en modo manga, hacia la derecha), doble toque o pellizcar para hacer zoom y tocar en los laterales.
+- **Emparejado con el PC** (una sola vez): en el PC ve a **Ajustes → Emparejar un móvil o tablet** y en el móvil pulsa **Escanear QR**.
+  - ¿Cámara rota o no lee el QR? Pulsa **Emparejar sin cámara**: el móvil busca tu PC en la Wi‑Fi (o escribes su dirección) y los dos muestran el mismo número de 6 cifras, que confirmas en el PC. También puedes **leer el QR de una foto**.
+- **Sincronización automática** cuando el móvil y el PC están en la misma Wi‑Fi: al abrir la app, al volver a ella y al cerrar un tomo se intercambian el progreso y el historial. Siempre gana la lectura más reciente.
+- **«Leyendo en el PC»**: en el móvil ves lo que estás leyendo en el PC aunque no tengas el archivo, y puedes descargarlo o leerlo directamente desde el PC sin descargar.
+- **Pestaña PC**: toda la biblioteca del PC para descargar tomos o series enteras.
+- **Descargas automáticas**: Porter se trae del PC lo que estás leyendo y los siguientes tomos de la serie (configurable). Desde el PC también puedes hacer clic derecho → **Enviar al móvil**.
+- **Importar** archivos CBZ, CBR y PDF que ya tengas en el móvil.
+
+**Seguridad:** el emparejado intercambia una clave secreta (ECDH P‑256) que nunca viaja por la red. Después, todo (progreso, historial y páginas) va cifrado y autenticado con AES‑256‑GCM, con protección contra repeticiones. El PC solo atiende a dispositivos emparejados, que puedes quitar desde Ajustes, y solo abre la conexión si tienes algún móvil emparejado. La primera vez Windows preguntará si permites a Porter usar la red privada: acepta.
+
 ## Funciones
 - **Biblioteca por carpetas vigiladas**: añade una o varias carpetas (botón «+ Carpeta» o arrastrándolas a la ventana). Cada subcarpeta es una serie. Lo que copies o borres aparece o desaparece solo. Sin límite de libros.
 - **Continuar leyendo**: Porter guarda la página exacta de cada libro y te devuelve ahí al abrirlo.
@@ -76,9 +90,20 @@ npm run dist       # generar dist/Porter-x.y.z-win.zip
 ```
 Los datos (biblioteca, progreso, historial, portadas) se guardan en `%APPDATA%\porter`.
 
+### Android
+El APK lo compila GitHub Actions (`.github/workflows/android.yml`) en cada cambio y lo adjunta a cada versión publicada. Necesita el secreto `ANDROID_KEYSTORE_PASSWORD`. Para compilarlo en local, con Android Studio instalado:
+```
+cd mobile
+npm install
+npm run sync        # construye la web y la copia al proyecto Android
+npx cap open android
+```
+
 ### Estructura
-- `src/main/`: proceso principal de Electron (biblioteca y vigilancia de carpetas, lectura de CBZ/CBR, protocolo `porter://`, guardado de datos).
-- `src/renderer/`: interfaz (biblioteca, historial y lector).
+- `src/main/`: proceso principal de Electron (biblioteca y vigilancia de carpetas, lectura de CBZ/CBR, protocolo `porter://`, guardado de datos, servidor para el móvil).
+- `src/renderer/`: interfaz compartida por PC y Android (biblioteca, historial y lector).
+- `src/shared/`: protocolo cifrado y sincronización, común a PC y móvil.
+- `mobile/`: app de Android (Capacitor). Tiene su propio almacenamiento, emparejado, descargas e importación.
 - `build/`: icono y script que escribe los metadatos de `Porter.exe`.
 
 ## Contribuir
