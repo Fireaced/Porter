@@ -242,7 +242,7 @@ class SyncServer {
     if (!b) throw new Error('Ese archivo ya no está en el PC');
     return b;
   }
-  publicBook(b) { return { id: b.id, fp: b.fp, title: b.title, series: b.series, ext: b.ext, pages: b.pages, size: b.size }; }
+  publicBook(b) { return { id: b.id, fp: b.fp, title: b.title, series: b.series, ext: b.ext, pages: b.pages, size: b.size, name: path.basename(b.path || '') }; }
   hasCover(fp) { return fs.existsSync(path.join(this.coversDir, fp + '.webp')); }
 
   async call(devId, dev, m, a) {

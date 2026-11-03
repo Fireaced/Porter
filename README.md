@@ -39,12 +39,13 @@ Descarga el APK `Porter-x.y.z.apk` desde **[Releases](https://github.com/Fireace
 - **«Leyendo en el PC»**: en el móvil ves lo que estás leyendo en el PC aunque no tengas el archivo, y puedes descargarlo o leerlo directamente desde el PC sin descargar.
 - **Pestaña PC**: toda la biblioteca del PC para descargar tomos o series enteras.
 - **Descargas automáticas**: Porter se trae del PC lo que estás leyendo y los siguientes tomos de la serie (configurable). Desde el PC también puedes hacer clic derecho → **Enviar al móvil**.
-- **Importar** archivos CBZ, CBR y PDF que ya tengas en el móvil.
+- **Carpetas del móvil**: pulsa **Añadir → Elegir carpeta** y Porter lee tus CBZ, CBR y PDF directamente de esa carpeta (sin copiarlos). Cada subcarpeta es una serie y los archivos nuevos aparecen solos al abrir la app. Lo que descargues del PC se guarda también ahí, en una subcarpeta por serie. Si lo prefieres, también puedes copiar archivos sueltos a Porter.
+- **Pantalla completa** en el lector: oculta las barras de Android (desliza desde el borde para verlas un momento).
 
 **Seguridad:** el emparejado intercambia una clave secreta (ECDH P‑256) que nunca viaja por la red. Después, todo (progreso, historial y páginas) va cifrado y autenticado con AES‑256‑GCM, con protección contra repeticiones. El PC solo atiende a dispositivos emparejados, que puedes quitar desde Ajustes, y solo abre la conexión si tienes algún móvil emparejado. La primera vez Windows preguntará si permites a Porter usar la red privada: acepta.
 
 ## Funciones
-- **Biblioteca por carpetas vigiladas**: añade una o varias carpetas (botón «+ Carpeta» o arrastrándolas a la ventana). Cada subcarpeta es una serie. Lo que copies o borres aparece o desaparece solo. Sin límite de libros.
+- **Biblioteca por carpetas vigiladas**: añade una o varias carpetas (botón «+ Carpeta» o arrastrándolas a la ventana). Cada subcarpeta es una serie; si los tomos están sueltos, Porter agrupa la serie por el nombre («Berserk 01», «Berserk 02»… → Berserk). Lo que copies o borres aparece o desaparece solo. Sin límite de libros.
 - **Continuar leyendo**: Porter guarda la página exacta de cada libro y te devuelve ahí al abrirlo.
 - **Progreso**: barra de progreso en cada portada, «✓ Leído» al terminar y «X de Y leídos» por serie. Clic derecho para marcar como leído/no leído.
 - **Modo manga** (derecha → izquierda), modo normal y modo vertical (webtoon). Porter recuerda el modo de cada serie.

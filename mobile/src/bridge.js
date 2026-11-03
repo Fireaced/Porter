@@ -3,6 +3,8 @@
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { mergeProgress } from '../../src/shared/proto.mjs';
+import { guessSeries } from '../../src/shared/series.js';
+import { PorterFiles, openHandle, bookReader, forgetReader } from './files.js';
 
 const ROOT = 'porter';
 const DATA_FILE = `${ROOT}/data.json`;
@@ -21,6 +23,8 @@ const DEFAULTS = () => ({
   removeFinished: false,
   onPc: {},            // pcId -> [fp] (qué hay en cada PC, para "Está en el PC")
   pcBooks: {},         // fp -> datos del libro en el PC (título, serie...)
+  folders: [],         // carpetas del móvil elegidas por el usuario: { uri, name, writable, error }
+  downloadTo: null,    // uri de la carpeta donde guardar lo que llega del PC (null = memoria de la app)
 });
 
 // ---------- utilidades de archivos ----------
@@ -39,6 +43,8 @@ const MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'i
 export const extOfMime = (m) => ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp' }[m] || 'jpg');
 
 let rootUri = null;
+let immersive = false;
+const fullListeners = [];
 export async function writeBytes(path, bytes) {
   await Filesystem.writeFile({ path, directory: Directory.Data, data: b64FromBytes(bytes), recursive: true });
 }
@@ -137,7 +143,86 @@ export async function deleteLocalBook(fp) {
   if (!b) return;
   delete store.data.books[fp];
   const h = store.data.history[fp]; if (h) h.available = false;
-  await removeDir(`${ROOT}/books/${b.dir || fp}`);
+  forgetReader(fp);
+  if (b.file?.kind === 'saf') await PorterFiles.delete({ uri: b.file.uri }).catch(() => {});
+  else await removeDir(`${ROOT}/books/${b.dir || fp}`);
+  store.save(); store.emit();
+}
+
+// ---------- carpetas del móvil ----------
+// Los archivos se leen directamente de la carpeta (no se copian). Se vuelve a mirar al abrir la app.
+let scanning = null;
+export function scanFolders() {
+  if (!scanning) scanning = doScan().finally(() => { scanning = null; });
+  return scanning;
+}
+async function doScan() {
+  const d = store.data;
+  let changed = false;
+  for (const folder of d.folders) {
+    let files;
+    try {
+      const ok = (await PorterFiles.check({ uri: folder.uri })).ok;
+      if (!ok) throw new Error('Sin permiso');
+      files = (await PorterFiles.list({ uri: folder.uri })).files;
+      if (folder.error) { delete folder.error; changed = true; }
+    } catch (e) {
+      if (!folder.error) changed = true;
+      folder.error = 'Porter ya no tiene permiso para esta carpeta. Quítala y vuelve a añadirla.';
+      continue;
+    }
+    const byUri = new Map(Object.values(d.books).filter((b) => b.folder === folder.uri).map((b) => [b.file.uri, b]));
+    const seen = new Set();
+    for (const f of files) {
+      const prev = byUri.get(f.uri);
+      if (prev && prev.size === f.size) { seen.add(prev.fp); continue; }
+      const fp = await fingerprint(f.name, f.size);
+      if (prev) { delete d.books[prev.fp]; forgetReader(prev.fp); }
+      if (d.books[fp] && d.books[fp].folder !== folder.uri) continue;   // ya está (importado o en otra carpeta)
+      const title = f.name.replace(/\.[^.]+$/, '').replace(/_+/g, ' ').trim();
+      const first = (f.dir || '').split('/')[0];
+      const series = first && !/^\s*(?:vol(?:umen|ume)?|tomo|t|v|#)?\.?\s*\d{1,4}\s*$/i.test(first) ? guessSeries(first) : guessSeries(title);
+      const ext = (f.name.split('.').pop() || '').toLowerCase();
+      d.books[fp] = {
+        fp, id: fp, title, series, ext: ext === 'zip' ? 'cbz' : ext === 'rar' ? 'cbr' : ext,
+        size: f.size, pages: d.books[fp]?.pages || null, added: d.books[fp]?.added || Date.now(),
+        file: { kind: 'saf', uri: f.uri, name: f.name }, folder: folder.uri, fromPc: d.books[fp]?.fromPc,
+      };
+      const h = d.history[fp]; if (h) h.available = true;
+      seen.add(fp); changed = true;
+    }
+    for (const b of byUri.values()) {
+      if (seen.has(b.fp)) continue;
+      delete d.books[b.fp]; forgetReader(b.fp);
+      const h = d.history[b.fp]; if (h) h.available = false;
+      changed = true;
+    }
+  }
+  // Libros de carpetas que ya no están en la lista
+  const uris = new Set(d.folders.map((f) => f.uri));
+  for (const b of Object.values(d.books)) {
+    if (b.folder && !uris.has(b.folder)) { delete d.books[b.fp]; const h = d.history[b.fp]; if (h) h.available = false; changed = true; }
+  }
+  if (changed) { store.save(); store.emit(); }
+  return changed;
+}
+
+export async function addPhoneFolder() {
+  const r = await PorterFiles.pickFolder();
+  const d = store.data;
+  if (!d.folders.some((f) => f.uri === r.uri)) d.folders.push({ uri: r.uri, name: r.name || 'Carpeta', writable: r.writable !== false });
+  if (!d.downloadTo && r.writable !== false) d.downloadTo = r.uri;
+  store.save();
+  await scanFolders();
+  store.emit();
+  return r;
+}
+
+export async function removePhoneFolder(uri) {
+  const d = store.data;
+  d.folders = d.folders.filter((f) => f.uri !== uri);
+  if (d.downloadTo === uri) d.downloadTo = d.folders.find((f) => f.writable && !f.error)?.uri || null;
+  await scanFolders();
   store.save(); store.emit();
 }
 
@@ -182,6 +267,8 @@ const api = {
     if (String(id).startsWith('R:')) {
       const info = await remote.client.call('open', { id: b.pcId });
       b.pages = info.pages;
+    } else if (b.file && b.ext !== 'pdf') {
+      b.pages = (await bookReader(b)).count;
     }
     touchHistory(b);
     store.save();
@@ -216,32 +303,46 @@ const api = {
   saveCover: async (fp, buf) => { await saveCoverBytes(fp, new Uint8Array(buf)); return true; },
   setSettings: async (patch) => { Object.assign(store.data.settings, patch); store.save(); return store.data.settings; },
   reveal: async () => {},
+  // Pantalla completa: en Android se ocultan las barras del sistema (el modo del navegador no hace nada)
   fullscreen: async (v) => {
-    try {
-      const on = v ?? !document.fullscreenElement;
-      if (on && !document.fullscreenElement) await document.documentElement.requestFullscreen();
-      if (!on && document.fullscreenElement) await document.exitFullscreen();
-    } catch (_) {}
-    return !!document.fullscreenElement;
+    const on = v ?? !immersive;
+    if (on === immersive) return immersive;
+    try { await PorterFiles.immersive({ on }); immersive = on; } catch (_) {}
+    document.body.classList.toggle('immersive', immersive);
+    fullListeners.forEach((fn) => fn(immersive));
+    return immersive;
   },
   onLibrary: (fn) => store.listeners.push(fn),
-  onFullscreen: (fn) => document.addEventListener('fullscreenchange', () => fn(!!document.fullscreenElement)),
+  onFullscreen: (fn) => fullListeners.push(fn),
 
   // Recursos de los libros
   coverURL: (fp) => coverUrls.get(fp) || '',
   pageBlob: async (id, i) => {
     if (String(id).startsWith('R:')) return remote.client.pageBlob(remote.open.get(id).pcId, i);
     const b = store.data.books[id];
+    if (b.file) return (await bookReader(b)).blob(i);
     return readBlob(`${ROOT}/books/${b.dir || b.fp}/${b.files[i]}`);
   },
   thumbBlob: async (book) => api.pageBlob(book.id, 0),
   pdfSource: async (id) => {
     if (String(id).startsWith('R:')) {
-      const b = remote.open.get(id);
-      const blob = await remote.client.fileBytes(b.pcId);
-      return { data: new Uint8Array(await blob.arrayBuffer()) };
+      // PDF del PC: se piden al PC solo los trozos que se van leyendo
+      const b = remote.open.get(id), c = remote.client;
+      let size = b.size;
+      if (!size) size = (await c.call('file', { id: b.pcId, offset: 0, length: 0 })).header.size;
+      return { reader: { size, read: async (offset, length) => {
+        const out = new Uint8Array(length);
+        let got = 0;
+        while (got < length) {
+          const part = (await c.call('file', { id: b.pcId, offset: offset + got, length: Math.min(4 * 1024 * 1024, length - got) }, 60000)).bytes;
+          if (!part.length) break;
+          out.set(part, got); got += part.length;
+        }
+        return got < length ? out.subarray(0, got) : out;
+      } } };
     }
     const b = store.data.books[id];
+    if (b.file) return { reader: await openHandle(b) };
     if (native && rootUri) return { url: Capacitor.convertFileSrc(`${rootUri}/books/${b.dir || b.fp}/${b.files[0]}`) };
     return { data: new Uint8Array(await (await readBlob(`${ROOT}/books/${b.dir || b.fp}/${b.files[0]}`)).arrayBuffer()) };
   },

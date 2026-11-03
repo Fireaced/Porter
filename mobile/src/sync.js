@@ -2,9 +2,11 @@
 import { PcClient } from '../../src/shared/pc-client.mjs';
 import { mergeProgress, mergeHistory, shareableHistory } from '../../src/shared/proto.mjs';
 import { zipSync } from 'fflate';
+import { createTarget, openHandle } from './files.js';
 import { store, writeBytes, addLocalBook, deleteLocalBook, saveCoverBytes, extOfMime, remote, readBlob, b64FromBytes, rekeyBook } from './bridge.js';
 
 const ROOT = 'porter';
+const safeName = (x) => String(x || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[ .]+|[ .]+$/g, '').slice(0, 150) || 'Sin título';
 
 export class SyncEngine {
   constructor() {
@@ -145,38 +147,46 @@ export class SyncEngine {
     }
   }
 
+  // Se descarga el archivo original por trozos de 4 MB, escribiéndolo directamente en el disco
+  // (en la carpeta del móvil elegida, o en la memoria de la app).
   async download(job) {
     const c = await this.client(job.pcId);
     if (!c) throw new Error('PC no disponible');
     const b = job.book;
-    const dir = `${ROOT}/books/${b.fp}`;
-    const files = [];
-    if (b.ext === 'pdf') {
-      const blob = await c.fileBytes(b.id, (p) => { job.progress = p; this.emit(); });
-      if (job.cancelled) throw new Error('cancelada');
-      await writeBytes(`${dir}/book.pdf`, new Uint8Array(await blob.arrayBuffer()));
-      files.push('book.pdf');
-    } else {
-      const info = await c.call('open', { id: b.id });
-      const n = info.pages;
-      if (!n) throw new Error('El archivo no tiene páginas');
-      for (let i = 0; i < n; i++) {
+    const ext = b.ext === 'zip' ? 'cbz' : b.ext === 'rar' ? 'cbr' : b.ext;
+    const name = safeName(b.name || `${b.title}.${ext}`);
+    const d = store.data;
+    const folder = d.folders.find((f) => f.uri === d.downloadTo && f.writable && !f.error);
+    const sub = b.series && b.series !== b.title ? safeName(b.series) : '';
+    const target = await createTarget(folder
+      ? { tree: folder.uri, dir: sub, name }
+      : { appPath: `${ROOT}/books/${b.fp}/${name}`, name });
+    try {
+      let offset = 0, size = b.size || Infinity;
+      while (offset < size) {
         if (job.cancelled) throw new Error('cancelada');
-        const r = await c.call('page', { id: b.id, n: i }, 60000);
-        const name = `p${String(i + 1).padStart(4, '0')}.${extOfMime(r.header.mime)}`;
-        await writeBytes(`${dir}/${name}`, r.bytes);
-        files.push(name);
-        job.progress = (i + 1) / n;
-        if (i % 2 === 0 || i === n - 1) this.emit();
+        const r = await c.call('file', { id: b.id, offset, length: 4 * 1024 * 1024 }, 90000);
+        size = r.header.size;
+        if (!r.bytes.length && offset < size) throw new Error('El PC dejó de enviar el archivo');
+        await target.append(r.bytes);
+        offset += r.bytes.length;
+        job.progress = size ? offset / size : 1;
+        this.emit();
       }
-      b.pages = n;
+      b.size = size;
+    } catch (e) {
+      await target.abort();
+      throw e;
     }
     // Portada del PC (si la tiene)
     try {
       const cv = await c.call('cover', { fp: b.fp });
       if (cv.bytes?.length) await saveCoverBytes(b.fp, cv.bytes);
     } catch (_) {}
-    addLocalBook({ fp: b.fp, title: b.title, series: b.series, ext: b.ext, pages: b.pages, size: b.size, files, fromPc: job.pcId });
+    addLocalBook({
+      fp: b.fp, title: b.title, series: b.series, ext, pages: ext === 'pdf' ? b.pages : null, size: b.size,
+      file: target.file, folder: folder?.uri, fromPc: job.pcId,
+    });
   }
 
   // ---------- enviar un libro del móvil al PC ----------
@@ -185,28 +195,39 @@ export class SyncEngine {
     if (!pc) throw new Error('Primero empareja el móvil con tu PC');
     const c = await this.client(pc.id);
     if (!c) throw new Error('No encuentro tu PC en la Wi‑Fi. ¿Está encendido y con Porter abierto?');
-    const dir = `${ROOT}/books/${book.dir || book.fp}`;
-    let bytes, ext;
-    if (book.ext === 'pdf') {
-      bytes = new Uint8Array(await (await readBlob(`${dir}/${book.files[0]}`)).arrayBuffer());
-      ext = 'pdf';
-    } else {
-      // Se rehace un CBZ con las páginas originales (sin recomprimir)
-      const files = {};
-      for (let i = 0; i < book.files.length; i++) {
-        files[book.files[i]] = [new Uint8Array(await (await readBlob(`${dir}/${book.files[i]}`)).arrayBuffer()), { level: 0 }];
-        onProgress?.(0.2 * (i + 1) / book.files.length);
-      }
-      bytes = zipSync(files, { level: 0 });
-      ext = 'cbz';
-    }
     const uid = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
     const CH = 512 * 1024;
     let res = null;
-    for (let off = 0; off < bytes.length; off += CH) {
-      const chunk = bytes.subarray(off, Math.min(bytes.length, off + CH));
-      res = await c.call('put', { uid, name: `${book.title}.${ext}`, series: book.series, title: book.title, offset: off, size: bytes.length, data: b64FromBytes(chunk), origFp: book.fp }, 60000);
-      onProgress?.(0.2 + 0.8 * Math.min(1, (off + chunk.length) / bytes.length));
+    if (book.file) {
+      // Archivo original: se envía tal cual, por trozos
+      const h = await openHandle(book);
+      const name = book.file.name || `${book.title}.${book.ext}`;
+      for (let off = 0; off < h.size; off += CH) {
+        const chunk = await h.read(off, Math.min(CH, h.size - off));
+        res = await c.call('put', { uid, name, series: book.series, title: book.title, offset: off, size: h.size, data: b64FromBytes(chunk), origFp: book.fp }, 60000);
+        onProgress?.(Math.min(1, (off + chunk.length) / h.size));
+      }
+    } else {
+      const dir = `${ROOT}/books/${book.dir || book.fp}`;
+      let bytes, ext;
+      if (book.ext === 'pdf') {
+        bytes = new Uint8Array(await (await readBlob(`${dir}/${book.files[0]}`)).arrayBuffer());
+        ext = 'pdf';
+      } else {
+        // Se rehace un CBZ con las páginas originales (sin recomprimir)
+        const files = {};
+        for (let i = 0; i < book.files.length; i++) {
+          files[book.files[i]] = [new Uint8Array(await (await readBlob(`${dir}/${book.files[i]}`)).arrayBuffer()), { level: 0 }];
+          onProgress?.(0.2 * (i + 1) / book.files.length);
+        }
+        bytes = zipSync(files, { level: 0 });
+        ext = 'cbz';
+      }
+      for (let off = 0; off < bytes.length; off += CH) {
+        const chunk = bytes.subarray(off, Math.min(bytes.length, off + CH));
+        res = await c.call('put', { uid, name: `${book.title}.${ext}`, series: book.series, title: book.title, offset: off, size: bytes.length, data: b64FromBytes(chunk), origFp: book.fp }, 60000);
+        onProgress?.(0.2 + 0.8 * Math.min(1, (off + chunk.length) / bytes.length));
+      }
     }
     if (res?.fp) await rekeyBook(book.fp, res.fp, pc.id);
     await this.syncAll({ scan: false, quiet: true });

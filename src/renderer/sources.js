@@ -18,6 +18,17 @@ function pdfjs() {
 
 async function pdfParams(bookId) {
   const src = PF().pdfSource ? await PF().pdfSource(bookId) : { url: `porter://file/${bookId}` };
+  if (src.reader) {
+    // Lectura por trozos (Android): pdf.js pide solo las partes del PDF que necesita
+    const lib = await pdfjs();
+    const { size, read } = src.reader;
+    const head = await read(0, Math.min(size, 256 * 1024));
+    const t = new lib.PDFDataRangeTransport(size, head);
+    t.requestDataRange = (begin, end) => {
+      read(begin, end - begin).then((u8) => t.onDataRange(begin, u8)).catch((e) => console.error('PDF', e));
+    };
+    return { range: t, length: size, rangeChunkSize: 256 * 1024, disableAutoFetch: true, disableStream: true, isEvalSupported: false, enableXfa: false };
+  }
   return { ...src, isEvalSupported: false, enableXfa: false };
 }
 

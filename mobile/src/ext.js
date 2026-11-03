@@ -3,7 +3,7 @@
 import { App as CapApp } from '@capacitor/app';
 import { pairWithQr, sasBegin, scanNetwork } from '../../src/shared/pc-client.mjs';
 import { decodePairing, DEFAULT_PORT } from '../../src/shared/proto.mjs';
-import { store, deleteLocalBook } from './bridge.js';
+import { store, deleteLocalBook, scanFolders, addPhoneFolder, removePhoneFolder } from './bridge.js';
 import { sync } from './sync.js';
 import { scanWithCamera } from './scanner.js';
 import { importFile } from './importer.js';
@@ -115,6 +115,31 @@ export function createExt(app) {
   }
 
   // ---------- importar ----------
+  // ---------- carpetas del móvil ----------
+  async function addFolderFlow() {
+    const fromSettings = !!$('#dev-name') && !$('#modal').hidden;
+    $('#modal').hidden = true;
+    try {
+      const r = await addPhoneFolder();
+      const n = Object.values(store.data.books).filter((b) => b.folder === r.uri).length;
+      app.toast(n ? `${n} archivo${n > 1 ? 's' : ''} en «${r.name}»` : `«${r.name}» añadida. No hay CBZ, CBR ni PDF dentro todavía.`);
+      if (fromSettings) app.settings();
+    } catch (e) {
+      if (!/cancel/i.test(e.message || '')) modalMsg('No se pudo añadir la carpeta', e.message || String(e));
+    }
+  }
+  function addMenu() {
+    const m = $('#modal');
+    m.innerHTML = `<div class="dialog"><h3>Añadir mangas</h3>
+      <p><b>Elegir una carpeta</b> (recomendado): Porter lee los archivos directamente de esa carpeta del móvil y detecta los nuevos cada vez que abres la app. No ocupa espacio extra.</p>
+      <div class="actions" style="flex-direction:column;align-items:stretch">
+        <button class="btn big" data-act="add-folder">📁 Elegir carpeta</button>
+        <button class="btn ghost" data-act="import">Copiar archivos sueltos a Porter</button>
+      </div>
+      <div class="foot"><button class="btn ghost" data-act="close-modal">Cancelar</button></div></div>`;
+    m.hidden = false;
+  }
+
   function importFlow() {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.multiple = true;
@@ -299,8 +324,8 @@ export function createExt(app) {
   const ext = {
     init() {
       const add = $('#btn-add');
-      add.textContent = 'Importar';
-      add.onclick = importFlow;
+      add.textContent = 'Añadir';
+      add.onclick = addMenu;
       $('#btn-qr').onclick = () => (pcs().length ? (app.view = 'pc', app.series = null, app.render(), loadPcLibrary(true)) : scanQr());
       document.querySelector('.tab[data-view="pc"]').addEventListener('click', () => loadPcLibrary());
       sync.on(() => {
@@ -311,7 +336,8 @@ export function createExt(app) {
           clearTimeout(ext._rt); ext._rt = setTimeout(renderIfPc, 120);
         }
       });
-      CapApp.addListener('resume', () => sync.syncAll({ quiet: true }));
+      CapApp.addListener('resume', () => { scanFolders().catch(() => {}); sync.syncAll({ quiet: true }); });
+      scanFolders().catch(() => {});
       CapApp.addListener('backButton', () => ext.back());
       // Mientras la app está abierta, comprobar cada minuto si el PC ha enviado algo (sin escanear la red)
       setInterval(() => { if (document.visibilityState === 'visible' && !sync.busy && !app.reader.isOpen) sync.syncAll({ scan: false, quiet: true }); }, 60e3);
@@ -335,9 +361,10 @@ export function createExt(app) {
       const paired = pcs().length;
       return `<div class="empty connect">
         <h3>Tu biblioteca del móvil está vacía</h3>
-        <p>${paired ? 'Abre la pestaña <b>PC</b> para descargar mangas de tu ordenador, o importa archivos de este dispositivo.' : 'Empareja este móvil con Porter en tu PC para sincronizar lo que lees y pasarte mangas, o importa archivos de este dispositivo.'}</p>
+        <p>${paired ? 'Abre la pestaña <b>PC</b> para descargar mangas de tu ordenador, o elige la carpeta del móvil donde tienes tus mangas.' : 'Empareja este móvil con Porter en tu PC para sincronizar lo que lees y pasarte mangas, o elige la carpeta del móvil donde tienes tus mangas.'}</p>
         ${paired ? '<button class="btn big" data-act="go-pc">Ver la biblioteca del PC</button>' : `<button class="btn big" data-act="scan-qr">${QR_ICON} Escanear QR del PC</button><button class="btn ghost" data-act="pair-nocam">Emparejar sin cámara</button>`}
-        <button class="btn ghost" data-act="import">Importar archivos (CBZ, CBR, PDF)</button>
+        <button class="btn ${paired ? '' : 'ghost'}" data-act="add-folder">📁 Elegir la carpeta donde tienes tus mangas</button>
+        <button class="btn ghost" data-act="import">Copiar archivos sueltos (CBZ, CBR, PDF)</button>
       </div>${this.extraLibraryHTML()}`;
     },
 
@@ -361,7 +388,13 @@ export function createExt(app) {
 
     settingsHTML() {
       const d = store.data;
-      return `<h4>Tu PC</h4>
+      const writable = d.folders.filter((f) => f.writable && !f.error);
+      return `<h4>Carpetas del móvil</h4>
+        <p class="hint" style="margin:0 0 8px">Porter lee los mangas directamente de estas carpetas (y sus subcarpetas: cada subcarpeta es una serie).</p>
+        ${d.folders.map((f) => `<div class="folder"><span>📁 ${esc(f.name)} <span class="hint">· ${f.error ? esc(f.error) : Object.values(d.books).filter((b) => b.folder === f.uri).length + ' archivos'}</span></span><button class="icon-btn" data-unfolder="${esc(f.uri)}" title="Quitar carpeta">✕</button></div>`).join('') || '<p class="hint">Ninguna carpeta todavía.</p>'}
+        <div class="actions"><button class="btn" data-act="add-folder">📁 Añadir carpeta</button><button class="btn ghost" data-act="rescan-folders">Buscar archivos nuevos</button></div>
+        ${writable.length ? `<label class="field"><span>Guardar lo que descargues del PC en</span><select id="dl-to"><option value="">La memoria de Porter</option>${writable.map((f) => `<option value="${esc(f.uri)}" ${d.downloadTo === f.uri ? 'selected' : ''}>📁 ${esc(f.name)}</option>`).join('')}</select></label>` : ''}
+        <h4>Tu PC</h4>
         ${pcs().map((p) => `<div class="folder"><span>💻 ${esc(p.name)} <span class="hint">· ${p.lastSync ? 'sincronizado ' + new Date(p.lastSync).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'sin sincronizar'}</span></span><button class="icon-btn" data-unpair="${esc(p.id)}" title="Desemparejar">✕</button></div>`).join('') || '<p class="hint">Ningún PC emparejado.</p>'}
         <div class="actions"><button class="btn" data-act="scan-qr">${QR_ICON} Escanear QR</button><button class="btn ghost" data-act="pair-nocam">Emparejar sin cámara</button></div>
         <h4>Descargar automáticamente</h4>
@@ -370,13 +403,21 @@ export function createExt(app) {
         <label class="check"><input type="checkbox" id="rm-finished" ${d.removeFinished ? 'checked' : ''}><span>Borrar del móvil los tomos descargados del PC 3 días después de terminarlos<br><span class="hint">Siguen en el PC y en el historial.</span></span></label>
         <h4>Este dispositivo</h4>
         <div class="field" style="margin-top:0"><input type="text" id="dev-name" maxlength="40" value="${esc(d.device?.name || '')}" placeholder="Nombre del móvil"></div>
-        <p class="hint">${Object.keys(d.books).length} tomos guardados en el móvil.</p>
-        <div class="actions"><button class="btn ghost" data-act="import">Importar archivos</button></div>`;
+        <p class="hint">${Object.keys(d.books).length} tomos en el móvil.</p>
+        <div class="actions"><button class="btn ghost" data-act="import">Copiar archivos sueltos a Porter</button></div>`;
     },
 
     afterSettings() {
       const rm = $('#rm-finished');
       if (rm) rm.onchange = () => { store.data.removeFinished = rm.checked; store.save(); };
+      const dl = $('#dl-to');
+      if (dl) dl.onchange = () => { store.data.downloadTo = dl.value || null; store.save(); };
+      document.querySelectorAll('[data-unfolder]').forEach((b) => b.onclick = async () => {
+        const f = store.data.folders.find((x) => x.uri === b.dataset.unfolder);
+        if (!f || !confirm(`¿Quitar «${f.name}» de Porter? Los archivos no se borran del móvil; el progreso y el historial se conservan.`)) return;
+        await removePhoneFolder(f.uri);
+        app.settings();
+      });
       const dn = $('#dev-name');
       if (dn) dn.onchange = () => { store.data.device.name = dn.value.trim() || 'Android'; store.save(); };
     },
@@ -407,7 +448,8 @@ export function createExt(app) {
       app.toast(list.length > 1 ? `${list.length} tomos enviados a ${pc.name}` : `«${list[0].title}» está ya en ${pc.name}`);
     },
     async contextAction(a, book) {
-      if (a === 'delete-local' && confirm(`¿Borrar «${book.title}» del móvil? El progreso y el historial se conservan.`)) {
+      const where = book.folder ? ` de la carpeta «${store.data.folders.find((f) => f.uri === book.folder)?.name || 'del móvil'}»` : ' del móvil';
+      if (a === 'delete-local' && confirm(`¿Borrar el archivo «${book.title}»${where}? El progreso y el historial se conservan.`)) {
         await deleteLocalBook(book.fp);
         app.toast('Borrado del móvil');
       }
@@ -445,6 +487,8 @@ export function createExt(app) {
       if (act === 'pair-nocam') { pairNoCamera(); return true; }
       if (act === 'close-nc') { scanAbort?.abort(); $('#modal').hidden = true; return true; }
       if (act === 'import') { $('#modal').hidden = true; importFlow(); return true; }
+      if (act === 'add-folder') { addFolderFlow(); return true; }
+      if (act === 'rescan-folders') { scanFolders().then((ch) => { app.toast(ch ? 'Biblioteca actualizada' : 'No hay archivos nuevos'); if ($('#dev-name')) app.settings(); }); return true; }
       if (act === 'go-pc') { app.view = 'pc'; app.render(); loadPcLibrary(true); return true; }
       if (act === 'sync-now') { sync.syncAll().then(() => loadPcLibrary(true)); return true; }
       if (act === 'pc-reload') { pcLib = null; renderPc(); loadPcLibrary(true); sync.syncAll(); return true; }

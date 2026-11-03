@@ -6,6 +6,7 @@ const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const chokidar = require('chokidar');
+const { guessSeries } = require('../shared/series.js');
 
 const BOOK_EXT = new Set(['.cbz', '.zip', '.cbr', '.rar', '.pdf']);
 const isBook = (f) => BOOK_EXT.has(path.extname(f).toLowerCase());
@@ -21,10 +22,18 @@ function cleanTitle(file) {
   return path.basename(file, path.extname(file)).replace(/[_]+/g, ' ').trim();
 }
 
+// Serie: la primera subcarpeta dentro de la carpeta vigilada. Si el tomo está suelto (o en una
+// carpeta que solo es un número de tomo), se deduce del nombre: «Berserk 01», «Berserk 02»… -> «Berserk».
 function seriesOf(root, file) {
   const rel = path.relative(root, path.dirname(file));
-  if (!rel || rel === '.') return cleanTitle(file);
-  return rel.split(path.sep)[0];
+  const fromName = () => guessSeries(cleanTitle(file));
+  if (!rel || rel === '.' || rel.startsWith('..')) return fromName();
+  const parts = rel.split(path.sep);
+  if (parts[0] === 'Porter - Recibidos') parts.shift();   // libros enviados desde el móvil
+  const first = parts[0];
+  if (!first) return fromName();
+  if (/^\s*(?:vol(?:umen|ume)?|tomo|t|v|cap(?:[ií]tulo)?|ch(?:apter)?|#)?\.?\s*\d{1,4}\s*$/i.test(first)) return fromName();
+  return guessSeries(first);
 }
 
 class Library {
