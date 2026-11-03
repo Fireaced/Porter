@@ -1,0 +1,104 @@
+name: APK de Android
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      PORTER_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Comprobar la contraseña de firma
+        run: |
+          if [ -z "$PORTER_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Falta el secreto ANDROID_KEYSTORE_PASSWORD (Settings → Secrets and variables → Actions → New repository secret)."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      # La clave de firma se crea una sola vez y se guarda en el repositorio cifrada con la
+      # contraseña secreta. Así todas las versiones se firman igual y se instalan encima de la anterior.
+      - name: Clave de firma
+        run: |
+          KS=mobile/keystore/porter-release.p12
+          if [ ! -s "$KS" ]; then
+            mkdir -p mobile/keystore
+            git fetch origin main
+            git show "origin/main:$KS" > "$KS" 2>/dev/null || rm -f "$KS"
+          fi
+          if [ ! -s "$KS" ]; then
+            if [ "${{ github.event_name }}" = "release" ]; then
+              echo "::error::Todavía no existe la clave de firma. Espera a que termine la compilación de la rama main y vuelve a publicar la versión."
+              exit 1
+            fi
+            keytool -genkeypair -storetype PKCS12 -keystore "$KS" -alias porter -keyalg RSA -keysize 4096 -validity 36500 \
+              -storepass "$PORTER_KEYSTORE_PASSWORD" -keypass "$PORTER_KEYSTORE_PASSWORD" -dname "CN=Porter, O=Fireaced"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add "$KS"
+            git commit -m "Clave de firma del APK (cifrada con la contraseña secreta)"
+            git push origin HEAD:main
+          fi
+          keytool -list -keystore "$KS" -storetype PKCS12 -storepass "$PORTER_KEYSTORE_PASSWORD" > /dev/null \
+            || { echo "::error::La contraseña ANDROID_KEYSTORE_PASSWORD no coincide con la clave guardada."; exit 1; }
+          echo "PORTER_KEYSTORE=$GITHUB_WORKSPACE/$KS" >> "$GITHUB_ENV"
+
+      - name: Versión
+        run: |
+          echo "PORTER_VERSION_NAME=$(node -p "require('./mobile/package.json').version")" >> "$GITHUB_ENV"
+          echo "PORTER_VERSION_CODE=$((100 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
+
+      - name: Preparar la app (web + Capacitor)
+        working-directory: mobile
+        run: |
+          npm ci
+          npm run build
+          npx cap sync android
+
+      - name: Compilar el APK
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Nombre del APK
+        run: cp mobile/android/app/build/outputs/apk/release/app-release.apk "Porter-$PORTER_VERSION_NAME.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Porter-${{ env.PORTER_VERSION_NAME }}-apk
+          path: Porter-*.apk
+
+      - name: Adjuntar el APK a la versión publicada
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" "Porter-$PORTER_VERSION_NAME.apk" --clobber
