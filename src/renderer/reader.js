@@ -74,6 +74,14 @@ export class Reader {
 
   get isOpen() { return !!this.book; }
 
+  // Estado del lector para los reportes (sin títulos ni rutas)
+  context() {
+    if (!this.book) return null;
+    return { formato: this.book.ext, modo: this.mode, doble: this.double, desplazar: this.shift, ajuste: this.fit,
+      zoom: this.zoom, pagina: this.idx + 1, total: this.total, capas: this.stage.querySelectorAll('.layer').length,
+      ventana: `${innerWidth}x${innerHeight}@${devicePixelRatio}` };
+  }
+
   // ---------- Disposición ----------
   async layout(page, align = false) {
     this.stage.className = '';
@@ -588,7 +596,8 @@ export class Reader {
 
     document.addEventListener('keydown', (e) => {
       if (!this.isOpen) return;
-      if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+      if (!document.querySelector('#modal').hidden) { if (e.key === 'Escape') { document.querySelector('#modal').hidden = true; e.preventDefault(); } return; }
+      if ((e.target.tagName === 'INPUT' && e.target.type !== 'range') || e.target.tagName === 'TEXTAREA') return;
       const k = e.key;
       const endOpen = !$('#r-end').hidden;
       if (endOpen && k !== 'Escape' && k !== 'Enter') { if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Backspace') this.closeEnd(); return; }

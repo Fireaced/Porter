@@ -38,6 +38,13 @@ También puedes descomprimir el zip y abrir `Porter.exe` directamente. En ese ca
 - **Historial**: todo lo que lees queda guardado con portada, página y fecha, aunque el archivo se borre o se mueva («Archivo no disponible»). Si vuelve a aparecer, se reconecta solo y continúa donde lo dejaste.
 - Al terminar un tomo te ofrece abrir el siguiente de la serie.
 
+## Reportar fallos y sugerencias
+Pulsa el icono del bicho (arriba a la derecha, también dentro del lector) o ve a **Ajustes → Reportar un fallo o sugerencia**. El reporte llega de forma privada al autor y no se publica en ningún sitio.
+
+Si marcas «Adjuntar información técnica», se añade la versión de Porter y de Windows, la pantalla, la GPU, los ajustes de lectura y los últimos errores internos. Nunca se envían nombres de archivos ni rutas: Porter los sustituye por `<carpeta>` o `<ruta>` antes de enviar. Con «Ver qué se envía» puedes revisarlo antes.
+
+Si no hay conexión, el reporte se guarda y se envía la próxima vez que abras Porter.
+
 ## Calidad y rendimiento
 - Las imágenes se muestran con sus bytes originales, sin recomprimir.
 - Los PDF se renderizan a la resolución exacta de tu pantalla (incluido el escalado de Windows y el zoom).

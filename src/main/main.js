@@ -7,6 +7,10 @@ const { pathToFileURL } = require('url');
 const { Store } = require('./store');
 const { Library } = require('./library');
 const { BookCache, readFirstPage } = require('./archives');
+const report = require('./report');
+
+process.on('uncaughtException', (e) => { report.logError('main', e && e.stack || e); console.error(e); });
+process.on('unhandledRejection', (e) => report.logError('main', e && e.stack || e));
 
 // Se usan los ajustes de GPU por defecto de Chromium: forzar la GPU en drivers vetados
 // ('ignore-gpu-blocklist', 'enable-zero-copy') puede dejar la pantalla sin refrescar en algunos equipos.
@@ -208,6 +212,10 @@ function registerIpc() {
   });
 
   ipcMain.handle('book:reveal', (_e, id) => { const b = store.data.books[id]; if (b) shell.showItemInFolder(b.path); });
+  ipcMain.handle('report:info', (_e, ctx) => report.systemInfo(store, ctx));
+  ipcMain.handle('report:send', (_e, input) => report.sendReport(store, input));
+  ipcMain.handle('report:available', () => report.isConfigured());
+  ipcMain.on('log:error', (_e, msg) => report.logError('interfaz', msg));
   ipcMain.handle('win:fullscreen', (_e, v) => { win.setFullScreen(v ?? !win.isFullScreen()); return win.isFullScreen(); });
 }
 
@@ -232,6 +240,7 @@ app.whenReady().then(async () => {
     await library.rescanAll();
     library.watch();
     books.trimRarCache();
+    report.flushPending(store).catch(() => {});
   }, 300);
 });
 

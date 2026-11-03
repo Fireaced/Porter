@@ -261,6 +261,60 @@ class App {
     $('#toast').hidden = true;
   }
 
+  // ---------- Reporte de fallos ----------
+  async reportDialog(context = null) {
+    const m = $('#modal');
+    const wasReader = this.reader.isOpen;
+    m.innerHTML = `<div class="dialog">
+      <h3>Reportar un fallo o sugerencia</h3>
+      <p style="color:var(--muted);margin:-8px 0 4px;font-size:13px">Tu reporte llega de forma privada al autor de Porter. No se publica en ningún sitio.</p>
+      <div class="seg" style="display:inline-flex;margin-top:8px" id="rp-type">
+        <button data-t="fallo" class="on">Fallo</button><button data-t="sugerencia">Sugerencia</button>
+      </div>
+      <div class="field"><label for="rp-desc">¿Qué ha pasado?</label>
+        <textarea id="rp-desc" rows="4" maxlength="5000" placeholder="Ej.: en modo manga, al pasar de página la imagen se queda congelada aunque el contador avanza."></textarea></div>
+      <div class="field"><label for="rp-steps">Pasos para reproducirlo <span class="hint">(opcional)</span></label>
+        <textarea id="rp-steps" rows="3" maxlength="5000" placeholder="1. Abro un CBZ…&#10;2. Activo doble página…"></textarea></div>
+      <div class="field"><label for="rp-contact">Correo de contacto <span class="hint">(opcional, solo si quieres respuesta)</span></label>
+        <input id="rp-contact" type="email" maxlength="200" autocomplete="email"></div>
+      <label class="check"><input type="checkbox" id="rp-info" checked>
+        <span>Adjuntar información técnica<br><span class="hint">Versión, Windows, pantalla, ajustes de lectura y errores recientes. Sin nombres de archivos ni rutas.</span>
+        <button class="linkbtn" id="rp-show" type="button">Ver qué se envía</button></span></label>
+      <pre class="info" id="rp-preview" hidden></pre>
+      <div class="err" id="rp-err" hidden></div>
+      <div class="foot" style="gap:8px"><button class="btn ghost" data-act="close-modal">Cancelar</button><button class="btn" id="rp-send">Enviar</button></div>
+    </div>`;
+    m.hidden = false;
+    setTimeout(() => $('#rp-desc').focus(), 0);
+    let type = 'fallo';
+    m.querySelectorAll('#rp-type button').forEach((b) => b.onclick = () => {
+      type = b.dataset.t;
+      m.querySelectorAll('#rp-type button').forEach((x) => x.classList.toggle('on', x === b));
+      $('#rp-desc').placeholder = type === 'fallo' ? 'Ej.: en modo manga, al pasar de página la imagen se queda congelada aunque el contador avanza.' : '¿Qué te gustaría que hiciera Porter?';
+    });
+    $('#rp-show').onclick = async () => {
+      const pre = $('#rp-preview');
+      if (!pre.hidden) { pre.hidden = true; return; }
+      pre.textContent = await window.porter.reportInfo(context);
+      pre.hidden = false;
+    };
+    $('#rp-send').onclick = async () => {
+      const err = $('#rp-err');
+      err.hidden = true;
+      const description = $('#rp-desc').value.trim();
+      if (description.length < 10) { err.textContent = 'Cuéntame un poco más (al menos 10 caracteres).'; err.hidden = false; return; }
+      const btn = $('#rp-send'); btn.disabled = true; btn.textContent = 'Enviando…';
+      const r = await window.porter.sendReport({
+        type, description, steps: $('#rp-steps').value.trim(), contact: $('#rp-contact').value.trim(),
+        includeInfo: $('#rp-info').checked, context,
+      }).catch((e) => ({ ok: false, error: e.message }));
+      if (!r.ok) { err.textContent = r.error || 'No se pudo enviar.'; err.hidden = false; btn.disabled = false; btn.textContent = 'Enviar'; return; }
+      m.hidden = true;
+      this.toast(r.queued ? 'Sin conexión: el reporte se enviará la próxima vez que abras Porter.' : '¡Gracias! Reporte enviado.');
+      if (wasReader) this.reader.stage.focus();
+    };
+  }
+
   settings() {
     const s = this.state.settings;
     const m = $('#modal');
@@ -279,6 +333,8 @@ class App {
         ${[5, 10, 20, 40].map((n) => `<button data-preload="${n}" class="${(s.preload ?? 10) === n ? 'on' : ''}">${n}</button>`).join('')}
       </div>
       <p style="color:var(--muted);font-size:12.5px;margin-top:8px">Páginas que Porter tiene listas por delante (y la mitad por detrás). Más páginas = pasos más fluidos tras un salto, a cambio de algo más de memoria.</p>
+      <h4>Ayuda</h4>
+      <div class="actions"><button class="btn ghost" data-act="report">Reportar un fallo o sugerencia</button></div>
       <h4>Datos</h4>
       <div class="actions"><button class="btn danger" data-act="clear-history">Borrar historial</button></div>
       <div class="foot"><button class="btn ghost" data-act="close-modal">Cerrar</button></div>
@@ -314,6 +370,8 @@ class App {
     document.querySelectorAll('.tab').forEach((t) => t.onclick = () => { this.view = t.dataset.view; this.series = null; this.render(); this.content.scrollTop = 0; });
     $('#btn-add').onclick = () => this.addFolder();
     $('#btn-settings').onclick = () => this.settings();
+    $('#btn-report').onclick = () => this.reportDialog();
+    $('#r-report').onclick = () => this.reportDialog(this.reader.context());
     let qt;
     $('#search').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { this.query = e.target.value; this.render(); }, 120); };
 
@@ -322,6 +380,7 @@ class App {
       const t = e.target;
       const act = t.closest('[data-act]')?.dataset.act;
       if (act === 'add') { $('#modal').hidden = true; return this.addFolder(); }
+      if (act === 'report') return this.reportDialog();
       if (act === 'back') { this.series = null; this.render(); return; }
       if (act === 'rescan') { this.toast('Escaneando…'); this.setState(await window.porter.rescan()); this.toast('Biblioteca actualizada'); return this.settings(); }
       if (act === 'close-modal' || t.id === 'modal') { $('#modal').hidden = true; return; }
@@ -373,5 +432,11 @@ class App {
     });
   }
 }
+
+// Errores de la interfaz: se guardan (sin datos personales) para adjuntarlos a los reportes
+window.addEventListener('error', (e) => window.porter.logError(`${e.message} @ ${(e.filename || '').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => window.porter.logError('Promesa: ' + (e.reason?.stack || e.reason)));
+const _ce = console.error.bind(console);
+console.error = (...a) => { try { window.porter.logError(a.map((x) => x?.stack || String(x)).join(' ')); } catch (_) {} _ce(...a); };
 
 window.app = new App();
