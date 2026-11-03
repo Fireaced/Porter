@@ -1,7 +1,8 @@
 // Sincronización automática con el PC y descargas de mangas.
 import { PcClient } from '../../src/shared/pc-client.mjs';
 import { mergeProgress, mergeHistory, shareableHistory } from '../../src/shared/proto.mjs';
-import { store, writeBytes, addLocalBook, deleteLocalBook, saveCoverBytes, extOfMime, remote } from './bridge.js';
+import { zipSync } from 'fflate';
+import { store, writeBytes, addLocalBook, deleteLocalBook, saveCoverBytes, extOfMime, remote, readBlob, b64FromBytes, rekeyBook } from './bridge.js';
 
 const ROOT = 'porter';
 
@@ -176,6 +177,40 @@ export class SyncEngine {
       if (cv.bytes?.length) await saveCoverBytes(b.fp, cv.bytes);
     } catch (_) {}
     addLocalBook({ fp: b.fp, title: b.title, series: b.series, ext: b.ext, pages: b.pages, size: b.size, files, fromPc: job.pcId });
+  }
+
+  // ---------- enviar un libro del móvil al PC ----------
+  async uploadToPc(book, onProgress) {
+    const pc = this.pcs[0];
+    if (!pc) throw new Error('Primero empareja el móvil con tu PC');
+    const c = await this.client(pc.id);
+    if (!c) throw new Error('No encuentro tu PC en la Wi‑Fi. ¿Está encendido y con Porter abierto?');
+    const dir = `${ROOT}/books/${book.dir || book.fp}`;
+    let bytes, ext;
+    if (book.ext === 'pdf') {
+      bytes = new Uint8Array(await (await readBlob(`${dir}/${book.files[0]}`)).arrayBuffer());
+      ext = 'pdf';
+    } else {
+      // Se rehace un CBZ con las páginas originales (sin recomprimir)
+      const files = {};
+      for (let i = 0; i < book.files.length; i++) {
+        files[book.files[i]] = [new Uint8Array(await (await readBlob(`${dir}/${book.files[i]}`)).arrayBuffer()), { level: 0 }];
+        onProgress?.(0.2 * (i + 1) / book.files.length);
+      }
+      bytes = zipSync(files, { level: 0 });
+      ext = 'cbz';
+    }
+    const uid = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const CH = 512 * 1024;
+    let res = null;
+    for (let off = 0; off < bytes.length; off += CH) {
+      const chunk = bytes.subarray(off, Math.min(bytes.length, off + CH));
+      res = await c.call('put', { uid, name: `${book.title}.${ext}`, series: book.series, title: book.title, offset: off, size: bytes.length, data: b64FromBytes(chunk), origFp: book.fp }, 60000);
+      onProgress?.(0.2 + 0.8 * Math.min(1, (off + chunk.length) / bytes.length));
+    }
+    if (res?.fp) await rekeyBook(book.fp, res.fp, pc.id);
+    await this.syncAll({ scan: false, quiet: true });
+    return res;
   }
 
   // ---------- lectura en streaming desde el PC ----------

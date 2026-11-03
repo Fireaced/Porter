@@ -137,7 +137,27 @@ export async function deleteLocalBook(fp) {
   if (!b) return;
   delete store.data.books[fp];
   const h = store.data.history[fp]; if (h) h.available = false;
-  await removeDir(`${ROOT}/books/${fp}`);
+  await removeDir(`${ROOT}/books/${b.dir || fp}`);
+  store.save(); store.emit();
+}
+
+// Tras enviar un libro al PC, el PC asigna su propia huella al archivo: se reasigna aquí para
+// que el progreso y el historial queden vinculados en los dos dispositivos.
+export async function rekeyBook(oldFp, newFp, pcId) {
+  const d = store.data;
+  const b = d.books[oldFp];
+  if (!b || oldFp === newFp) { if (b) { b.fromPc = pcId; store.save(); } return; }
+  d.books[newFp] = { ...b, fp: newFp, id: newFp, dir: b.dir || oldFp, fromPc: pcId };
+  delete d.books[oldFp];
+  if (d.progress[oldFp] && !(d.progress[newFp]?.updated > d.progress[oldFp].updated)) d.progress[newFp] = d.progress[oldFp];
+  delete d.progress[oldFp];
+  if (d.history[oldFp]) { d.history[newFp] = { ...d.history[oldFp], fp: newFp, available: true }; delete d.history[oldFp]; }
+  if (coverUrls.has(oldFp)) {
+    try { await Filesystem.rename({ from: `${ROOT}/covers/${oldFp}.webp`, to: `${ROOT}/covers/${newFp}.webp`, directory: Directory.Data }); } catch (_) {}
+    coverUrls.delete(oldFp);
+    if (native && rootUri) coverUrls.set(newFp, Capacitor.convertFileSrc(`${rootUri}/covers/${newFp}.webp`) + `?v=${Date.now()}`);
+    else { try { coverUrls.set(newFp, URL.createObjectURL(await readBlob(`${ROOT}/covers/${newFp}.webp`))); } catch (_) {} }
+  }
   store.save(); store.emit();
 }
 
@@ -212,7 +232,7 @@ const api = {
   pageBlob: async (id, i) => {
     if (String(id).startsWith('R:')) return remote.client.pageBlob(remote.open.get(id).pcId, i);
     const b = store.data.books[id];
-    return readBlob(`${ROOT}/books/${b.fp}/${b.files[i]}`);
+    return readBlob(`${ROOT}/books/${b.dir || b.fp}/${b.files[i]}`);
   },
   thumbBlob: async (book) => api.pageBlob(book.id, 0),
   pdfSource: async (id) => {
@@ -222,8 +242,8 @@ const api = {
       return { data: new Uint8Array(await blob.arrayBuffer()) };
     }
     const b = store.data.books[id];
-    if (native && rootUri) return { url: Capacitor.convertFileSrc(`${rootUri}/books/${b.fp}/${b.files[0]}`) };
-    return { data: new Uint8Array(await (await readBlob(`${ROOT}/books/${b.fp}/${b.files[0]}`)).arrayBuffer()) };
+    if (native && rootUri) return { url: Capacitor.convertFileSrc(`${rootUri}/books/${b.dir || b.fp}/${b.files[0]}`) };
+    return { data: new Uint8Array(await (await readBlob(`${ROOT}/books/${b.dir || b.fp}/${b.files[0]}`)).arrayBuffer()) };
   },
 
   // Reportes de fallos: mismo formulario que el PC

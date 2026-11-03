@@ -16,8 +16,8 @@ const MAX_BODY = 1024 * 1024;
 const CLOCK_SKEW = 10 * 60e3;
 
 class SyncServer {
-  constructor({ store, books, readFirstPage, coversDir, rarCache, naturalCompare, onChange, onPairRequest, onPaired }) {
-    Object.assign(this, { store, books, readFirstPage, coversDir, rarCache, naturalCompare, onChange, onPairRequest, onPaired });
+  constructor({ store, books, library, readFirstPage, coversDir, rarCache, incomingDir, defaultInbox, naturalCompare, onChange, onPairRequest, onPaired }) {
+    Object.assign(this, { store, books, library, readFirstPage, coversDir, rarCache, incomingDir, defaultInbox, naturalCompare, onChange, onPairRequest, onPaired });
     this.server = null;
     this.port = null;
     this.pairing = null;          // { token, expires }
@@ -302,6 +302,7 @@ class SyncServer {
           return P.packBinary({ size: st.size, offset }, new Uint8Array(buf));
         } finally { await fh.close(); }
       }
+      case 'put': return P.packJson(await this.receive(a));
       case 'ack': {
         const done = new Set(a.fps || []);
         dev.outbox = (dev.outbox || []).filter((fp) => !done.has(fp));
@@ -310,6 +311,47 @@ class SyncServer {
       }
     }
     throw new Error('Método desconocido');
+  }
+
+  // ---------- recibir un libro desde el móvil ----------
+  async receive(a) {
+    const safe = (x, max = 120) => String(x || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/^[ .]+|[ .]+$/g, '').slice(0, max) || 'Sin título';
+    const uid = String(a.uid || '').replace(/[^a-f0-9]/gi, '').slice(0, 32);
+    const size = Number(a.size), offset = Number(a.offset);
+    if (!uid || !(size > 0) || size > 4 * 1024 ** 3 || !(offset >= 0)) throw new Error('Envío no válido');
+    const ext = (/\.(cbz|zip|cbr|rar|pdf)$/i.exec(String(a.name || '')) || [, 'cbz'])[1].toLowerCase();
+    await fs.promises.mkdir(this.incomingDir, { recursive: true });
+    const tmp = path.join(this.incomingDir, uid + '.part');
+    const cur = offset === 0 ? 0 : (await fs.promises.stat(tmp).catch(() => ({ size: -1 }))).size;
+    if (cur !== offset) throw new Error('Envío desordenado, vuelve a intentarlo');
+    const data = Buffer.from(String(a.data || ''), 'base64');
+    if (offset === 0) await fs.promises.writeFile(tmp, data); else await fs.promises.appendFile(tmp, data);
+    if (offset + data.length < size) return { ok: true, received: offset + data.length };
+    // Completo: a la carpeta "Porter - Recibidos" dentro de la primera carpeta vigilada
+    let root = this.store.data.folders[0];
+    if (!root) {
+      root = this.defaultInbox;
+      await fs.promises.mkdir(root, { recursive: true });
+      await this.library.addFolder(root);
+    }
+    const dir = path.join(root, 'Porter - Recibidos', safe(a.series, 80));
+    await fs.promises.mkdir(dir, { recursive: true });
+    const baseName = safe(String(a.name || 'Libro').replace(/\.[^.]+$/, ''));
+    let dest = path.join(dir, `${baseName}.${ext}`);
+    for (let n = 2; fs.existsSync(dest); n++) dest = path.join(dir, `${baseName} (${n}).${ext}`);
+    try { await fs.promises.rename(tmp, dest); } catch (_) { await fs.promises.copyFile(tmp, dest); await fs.promises.unlink(tmp).catch(() => {}); }
+    const st = await fs.promises.stat(dest);
+    await this.library.addFile(dest, st);
+    const book = Object.values(this.store.data.books).find((b) => b.path === dest);
+    const d = this.store.data;
+    if (book && a.origFp && a.origFp !== book.fp) {
+      // Mantener el progreso y el historial del móvil con la nueva huella
+      if (d.progress[a.origFp] && !d.progress[book.fp]) d.progress[book.fp] = d.progress[a.origFp];
+      if (d.history[a.origFp] && !d.history[book.fp]) d.history[book.fp] = { ...d.history[a.origFp], fp: book.fp, available: true, path: dest };
+    }
+    this.store.save();
+    this.onChange?.();
+    return { ok: true, done: true, fp: book?.fp, title: book?.title };
   }
 
   // Qué debería tener el móvil: lo enviado a mano + lo que se está leyendo + los N siguientes tomos
@@ -348,8 +390,9 @@ class SyncServer {
     return [...out.values()].slice(0, 20);
   }
 
-  queueForDevices(fps) {
-    for (const dev of Object.values(this.cfg.devices)) {
+  queueForDevices(fps, ids) {
+    for (const [id, dev] of Object.entries(this.cfg.devices)) {
+      if (ids && ids.length && !ids.includes(id)) continue;
       dev.outbox = [...new Set([...(dev.outbox || []), ...fps])];
     }
     this.store.save();

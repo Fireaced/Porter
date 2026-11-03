@@ -313,7 +313,8 @@ export function createExt(app) {
       });
       CapApp.addListener('resume', () => sync.syncAll({ quiet: true }));
       CapApp.addListener('backButton', () => ext.back());
-      setInterval(() => { if (document.visibilityState === 'visible' && !sync.busy) sync.syncAll({ scan: false, quiet: true }); }, 5 * 60e3);
+      // Mientras la app está abierta, comprobar cada minuto si el PC ha enviado algo (sin escanear la red)
+      setInterval(() => { if (document.visibilityState === 'visible' && !sync.busy && !app.reader.isOpen) sync.syncAll({ scan: false, quiet: true }); }, 60e3);
       setTimeout(() => sync.syncAll({ quiet: true }), 600);
     },
 
@@ -380,12 +381,63 @@ export function createExt(app) {
       if (dn) dn.onchange = () => { store.data.device.name = dn.value.trim() || 'Android'; store.save(); };
     },
 
-    contextItems() { return '<button data-c="delete-local">Borrar del móvil</button>'; },
+    contextItems() { return '<button data-c="delete-local">🗑 Borrar del móvil</button>'; },
+
+    // "Compartir con otro dispositivo" desde el móvil: enviar el archivo al PC
+    shareItemsFor(book) {
+      const pc = pcs()[0];
+      if (!pc) return '<button data-c="pair-pc">📲 Compartir con otro dispositivo…</button>';
+      if (book.fromPc || onPcFps().has(book.fp)) return `<button data-c="noop" disabled>💻 Ya está en ${esc(pc.name)}</button>`;
+      return `<button data-c="to-pc">📲 Compartir con ${esc(pc.name)}</button>`;
+    },
+    shareSeriesItems(list) {
+      const pc = pcs()[0];
+      if (!pc) return '<button data-c="pair-pc">📲 Compartir con otro dispositivo…</button>';
+      const pending = list.filter((b) => !b.fromPc && !onPcFps().has(b.fp));
+      return pending.length ? `<button data-c="to-pc">📲 Compartir la serie con ${esc(pc.name)} (${pending.length})</button>` : `<button data-c="noop" disabled>💻 Ya está en ${esc(pc.name)}</button>`;
+    },
+    async sendToPc(list) {
+      const pc = pcs()[0];
+      for (let i = 0; i < list.length; i++) {
+        const b = list[i];
+        try {
+          await sync.uploadToPc(b, (p) => app.toast(`Enviando a ${pc.name}${list.length > 1 ? ` (${i + 1}/${list.length})` : ''}: ${Math.round(p * 100)}%`));
+        } catch (e) { modalMsg('No se pudo compartir', e.message); return; }
+      }
+      app.toast(list.length > 1 ? `${list.length} tomos enviados a ${pc.name}` : `«${list[0].title}» está ya en ${pc.name}`);
+    },
     async contextAction(a, book) {
       if (a === 'delete-local' && confirm(`¿Borrar «${book.title}» del móvil? El progreso y el historial se conservan.`)) {
         await deleteLocalBook(book.fp);
         app.toast('Borrado del móvil');
       }
+      if (a === 'pair-pc') { app.toast('Empareja primero el móvil con tu PC'); scanQr(); }
+      if (a === 'to-pc') this.sendToPc([book]);
+    },
+    async seriesAction(a, list) {
+      if (a === 'pair-pc') { app.toast('Empareja primero el móvil con tu PC'); scanQr(); }
+      if (a === 'to-pc') this.sendToPc(list.filter((b) => !b.fromPc && !onPcFps().has(b.fp)));
+    },
+
+    // Siguiente tomo que solo está en el PC
+    nextRemote(book) {
+      const d = store.data;
+      const same = Object.entries(d.pcBooks).filter(([fp, m]) => m.series === book.series && !d.books[fp])
+        .sort((x, y) => collator.compare(x[1].title, y[1].title));
+      const hit = same.find(([, m]) => collator.compare(m.title, book.title) > 0);
+      if (!hit) return null;
+      const [fp, m] = hit;
+      return {
+        title: m.title, where: 'pc',
+        open: async () => {
+          try {
+            const b = await ensureBook(fp);
+            const id = await sync.openRemote(pcLib.pcId, b);
+            await app.openBook(id);
+            sync.enqueue(pcLib.pcId, b);   // y se descarga para tenerlo sin conexión
+          } catch (e) { app.toast(e.message); }
+        },
+      };
     },
 
     async action(act, t) {

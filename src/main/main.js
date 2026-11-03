@@ -216,7 +216,7 @@ function registerIpc() {
   ipcMain.handle('sync:closePairing', () => sync.closePairing());
   ipcMain.handle('sync:answer', (_e, session, accept) => sync.answerSas(session, accept));
   ipcMain.handle('sync:remove', (_e, id) => { sync.removeDevice(id); return sync.devicesList(); });
-  ipcMain.handle('sync:send', (_e, fps) => { sync.queueForDevices(fps); return sync.devicesList(); });
+  ipcMain.handle('sync:send', (_e, fps, ids) => { sync.queueForDevices(fps, ids); return sync.devicesList(); });
 
   ipcMain.handle('cover:has', (_e, fp) => fs.existsSync(path.join(COVERS, path.basename(fp) + '.webp')));
   ipcMain.handle('cover:save', async (_e, fp, buf) => {
@@ -254,7 +254,9 @@ app.whenReady().then(async () => {
 
   registerProtocol();
   sync = new SyncServer({
-    store, books, readFirstPage, coversDir: COVERS, rarCache: RARCACHE, naturalCompare: naturalSort,
+    store, books, library, readFirstPage, coversDir: COVERS, rarCache: RARCACHE, naturalCompare: naturalSort,
+    incomingDir: path.join(app.getPath('userData'), 'incoming'),
+    defaultInbox: path.join(app.getPath('documents'), 'Porter'),
     onChange: () => send('library:changed', snapshot()),
     onPairRequest: (r) => send('sync:pair-request', r),
     onPaired: (name) => send('sync:paired', name),

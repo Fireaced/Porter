@@ -29,6 +29,7 @@ export class Reader {
     this.shift = false;
     this.fit = s.fit || 'height';
     this.zoom = 1;
+    this.rotation = s.rotation?.[book.fp] || 0;
 
     this.el.hidden = false;
     this.showLoading(true);
@@ -87,6 +88,11 @@ export class Reader {
     this.stage.className = '';
     this.io?.disconnect(); this.io2?.disconnect();
     this.invalidate(true);
+    // Vaciar el escenario: si quedaba la columna del modo vertical (y su scroll), las capas del
+    // modo paginado quedaban fuera de la vista y se seguía viendo la imagen antigua.
+    this.stage.replaceChildren();
+    this.stage.scrollTop = 0; this.stage.scrollLeft = 0;
+    this.curLayer = null; this.vpages = null;
     this.src.setBudget?.(this.ahead() + this.behind());
     if (this.mode === 'vertical') return this.buildVertical(page);
     this.stage.classList.add('paged');
@@ -101,9 +107,16 @@ export class Reader {
 
   pairStart() { return this.shift ? 0 : 1; }
 
+  // Dimensiones teniendo en cuenta el giro
+  rd(d) { return d && this.rotation % 180 ? { w: d.h, h: d.w } : d; }
+  async rdims(i) { return this.rd(await this.src.dims(i)); }
+  element(i, w, h, cache = true) {
+    return this.src instanceof PdfSource ? this.src.element(i, w, h, cache, this.rotation) : this.src.element(i, w, h, this.rotation);
+  }
+
   async alignPage(i) {
     if (!this.double || i === 0) return i;
-    const d = await this.src.dims(i).catch(() => null);
+    const d = await this.rdims(i).catch(() => null);
     if (isWide(d)) return i;
     if ((i - this.pairStart()) % 2 !== 0 && i > 0) return i - 1;
     return i;
@@ -112,7 +125,7 @@ export class Reader {
   async spreadAt(i) {
     if (!this.double || this.mode === 'vertical') return [i];
     if (i < this.pairStart() || i + 1 >= this.total) return [i];
-    const [a, b] = await Promise.all([this.src.dims(i), this.src.dims(i + 1)]);
+    const [a, b] = await Promise.all([this.rdims(i), this.rdims(i + 1)]);
     if (isWide(a) || isWide(b)) return [i];
     return [i, i + 1];
   }
@@ -141,10 +154,10 @@ export class Reader {
     const gen = this.gen;
     p = (async () => {
       const spread = await this.spreadAt(start);
-      const dims = await Promise.all(spread.map((q) => this.src.dims(q)));
+      const dims = await Promise.all(spread.map((q) => this.rdims(q)));
       if (gen !== this.gen) return null;
       const sizes = this.computeSizes(dims);
-      const nodes = await Promise.all(spread.map((q, k) => this.src.element(q, sizes[k].w, sizes[k].h)));
+      const nodes = await Promise.all(spread.map((q, k) => this.element(q, sizes[k].w, sizes[k].h)));
       if (gen !== this.gen || !this.book) return null;
       const el = document.createElement('div');
       el.className = 'layer';
@@ -294,13 +307,13 @@ export class Reader {
     await this.src.dims(0).catch(() => {});
     if (t !== this.token) return;
     const w = this.verticalWidth();
-    const fallback = this.src.knownDims(start) || this.src.knownDims(0) || { w: 1, h: 1.42 };
+    const fallback = this.rd(this.src.knownDims(start) || this.src.knownDims(0)) || { w: 1, h: 1.42 };
     const col = document.createElement('div');
     col.className = 'vcol';
     col.style.width = w + 'px';
     this.vpages = [];
     for (let i = 0; i < this.total; i++) {
-      const d = this.src.knownDims(i) || fallback;
+      const d = this.rd(this.src.knownDims(i)) || fallback;
       const div = document.createElement('div');
       div.className = 'vpage';
       div.dataset.i = i;
@@ -308,6 +321,11 @@ export class Reader {
       this.vpages.push(div);
       col.append(div);
     }
+    // Al final de la columna: aviso de fin y paso al siguiente tomo
+    const end = document.createElement('div');
+    end.className = 'vend';
+    col.append(end);
+    this.fillEndBox(end);
     this.stage.replaceChildren(col);
     this.showLoading(false);
 
@@ -321,13 +339,21 @@ export class Reader {
       };
       if (this.src instanceof ImageSource) {
         const img = this.src.freshElement(i);
-        img.decode().then(() => { fit({ w: img.naturalWidth, h: img.naturalHeight }); }).catch(() => {});
+        const rot = this.rotation;
+        img.decode().then(() => {
+          const nd = { w: img.naturalWidth, h: img.naturalHeight };
+          fit(this.rd(nd));
+          if (rot) {
+            Object.assign(img.style, { inset: 'auto', left: '50%', top: '50%', transform: `translate(-50%, -50%) rotate(${rot}deg)` });
+            if (rot % 180) { img.style.width = (nd.w / nd.h * 100) + '%'; img.style.height = (nd.h / nd.w * 100) + '%'; }
+          }
+        }).catch(() => {});
         div.append(img); div._loading = false;
       } else {
-        this.src.dims(i).then((d) => {
+        this.rdims(i).then((d) => {
           fit(d);
           const width = parseFloat(col.style.width);
-          return this.src.element(i, width, Math.round(width * d.h / d.w), false);
+          return this.element(i, width, Math.round(width * d.h / d.w), false);
         }).then((c) => { if (div._wanted !== false) div.replaceChildren(c); else { c.width = 0; c.height = 0; } })
           .catch(() => {}).finally(() => { div._loading = false; });
       }
@@ -399,7 +425,7 @@ export class Reader {
       const col = this.stage.firstChild;
       col.style.width = w + 'px';
       for (const div of this.vpages) {
-        const d = this.src.knownDims(+div.dataset.i);
+        const d = this.rd(this.src.knownDims(+div.dataset.i));
         if (d) div.style.height = Math.round(w * d.h / d.w) + 'px';
         else div.style.height = Math.round(parseFloat(div.style.height) * z / (this._lastZ || 1)) + 'px';
         if (this.src instanceof PdfSource && div.firstChild) { div.replaceChildren(); this.io.unobserve(div); this.io.observe(div); }
@@ -431,6 +457,25 @@ export class Reader {
     $('#r-count').textContent = (a === b ? `${a}` : `${a}–${b}`) + ` / ${this.total}`;
     this.slider.value = String(this.spread[0]);
     $('#r-zoom').textContent = this.zoom === 1 ? '' : Math.round(this.zoom * 100) + '%';
+    const atEnd = this.spread[this.spread.length - 1] >= this.total - 1;
+    const nb = $('#r-next');
+    if (nb) {
+      const next = atEnd ? this.app.nextFor(this.book) : null;
+      nb.hidden = !next;
+      if (next) nb.textContent = 'Siguiente tomo ›';
+    }
+  }
+
+  // ---------- Girar ----------
+  async rotate(delta = 90) {
+    this.rotation = (this.rotation + delta + 360) % 360;
+    const s = this.app.state.settings;
+    const rotation = { ...(s.rotation || {}) };
+    if (this.rotation) rotation[this.book.fp] = this.rotation; else delete rotation[this.book.fp];
+    this.app.state.settings = await window.porter.setSettings({ rotation });
+    this.syncControls();
+    const page = this.spread[0];
+    await this.layout(page, true);
   }
 
   syncControls() {
@@ -441,6 +486,8 @@ export class Reader {
     $('#r-shift').classList.toggle('on', this.shift);
     $('#r-shift').disabled = this.mode === 'vertical' || !this.double;
     this.slider.classList.toggle('rtl', this.mode === 'manga');
+    const rb = $('#r-rotate');
+    if (rb) { rb.classList.toggle('on', !!this.rotation); rb.title = `Girar (R)${this.rotation ? ' · ' + this.rotation + '°' : ''}`; }
   }
 
   async setMode(m) {
@@ -482,9 +529,9 @@ export class Reader {
     else { clearTimeout(this._hideT); this.el.classList.add('chrome-off'); }
   }
 
-  showEnd() {
-    const box = $('#r-end');
-    const nb = this.app.nextBookOf(this.book);
+  // Contenido de "Has terminado" (superpuesto o al final de la columna vertical)
+  fillEndBox(box) {
+    const next = this.app.nextFor(this.book);
     box.innerHTML = '';
     const d = document.createElement('div');
     d.className = 'box';
@@ -495,15 +542,29 @@ export class Reader {
     back.className = 'btn ghost'; back.textContent = 'Volver a la biblioteca';
     back.onclick = () => this.close();
     act.append(back);
-    if (nb) {
+    if (next) {
       const nx = document.createElement('button');
-      nx.className = 'btn'; nx.textContent = 'Siguiente: ' + nb.title;
-      nx.onclick = () => { this.saveProgress(true); this.close(); this.app.openBook(nb.id); };
+      nx.className = 'btn next-btn'; nx.textContent = (next.where === 'pc' ? 'Siguiente (en el PC): ' : 'Siguiente: ') + next.title;
+      nx.onclick = () => this.goNextBook();
       act.append(nx);
-      setTimeout(() => nx.focus(), 0);
     }
     box.append(d);
+    return next;
+  }
+
+  async goNextBook() {
+    const next = this.app.nextFor(this.book);
+    if (!next) return;
+    this.saveProgress(true);
+    this.close();
+    await next.open();
+  }
+
+  showEnd() {
+    const box = $('#r-end');
+    const next = this.fillEndBox(box);
     box.hidden = false;
+    if (next) setTimeout(() => box.querySelector('.next-btn')?.focus(), 0);
     this.saveProgress(true);
   }
   closeEnd() { $('#r-end').hidden = true; }
@@ -513,6 +574,8 @@ export class Reader {
     const st = this.stage;
     $('#r-back').onclick = () => this.close();
     $('#r-full').onclick = () => window.porter.fullscreen();
+    if ($('#r-rotate')) $('#r-rotate').onclick = () => this.rotate(90);
+    if ($('#r-next')) $('#r-next').onclick = () => this.goNextBook();
     $('#r-double').onclick = () => this.setDouble(!this.double);
     $('#r-shift').onclick = async () => { this.shift = !this.shift; this.syncControls(); this.invalidate(); this.go(await this.alignPage(this.spread[0])); };
     document.querySelectorAll('#r-mode button').forEach((b) => b.onclick = () => this.setMode(b.dataset.mode));
@@ -677,6 +740,7 @@ export class Reader {
         case 'f': case 'F': case 'F11': window.porter.fullscreen(); break;
         case 'm': case 'M': this.setMode({ manga: 'ltr', ltr: 'vertical', vertical: 'manga' }[this.mode]); break;
         case 'd': case 'D': if (!vert) this.setDouble(!this.double); break;
+        case 'r': case 'R': this.rotate(e.shiftKey ? -90 : 90); break;
         case '+': case '=': this.rezoom(this.zoom * 1.2); break;
         case '-': this.rezoom(this.zoom / 1.2); break;
         case '0': this.rezoom(1); break;
@@ -685,7 +749,7 @@ export class Reader {
           else if (this.isFull) window.porter.fullscreen(false);
           else this.close();
           break;
-        case 'Enter': if (endOpen) document.activeElement?.click?.(); else handled = false; break;
+        case 'Enter': if (endOpen) ($('#r-end .next-btn') || document.activeElement)?.click?.(); else handled = false; break;
         default: handled = false;
       }
       if (handled) e.preventDefault();

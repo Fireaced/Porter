@@ -3,6 +3,7 @@ import { makeCover } from './sources.js';
 
 const $ = (s) => document.querySelector(s);
 const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
+const MORE = '<svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="5" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="19" r="2" fill="currentColor"/></svg>';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 class App {
@@ -38,9 +39,9 @@ class App {
         this.pairing = false;
         $('#modal').hidden = true;
         this.toast(`${name} emparejado. Ya se sincronizará solo en tu Wi‑Fi.`);
-        this.deviceCount = (this.deviceCount || 0) + 1;
+        window.porter.syncDevices().then((i) => { this.deviceCount = i.devices.length; this.devices = i.devices; });
       });
-      window.porter.syncDevices().then((i) => { this.deviceCount = i.devices.length; });
+      window.porter.syncDevices().then((i) => { this.deviceCount = i.devices.length; this.devices = i.devices; });
     }
     this.setState(await window.porter.getLibrary());
     window.porter.onLibrary((d) => { this.setState(d); });
@@ -74,8 +75,17 @@ class App {
 
   nextBookOf(book) {
     const list = this.seriesMap().get(book.series) || [];
-    const i = list.findIndex((b) => b.id === book.id);
-    return i >= 0 ? list[i + 1] || null : null;
+    const i = list.findIndex((b) => b.fp === book.fp);
+    if (i >= 0) return list[i + 1] || null;
+    return list.find((b) => collator.compare(b.title, book.title) > 0) || null;
+  }
+
+  // Siguiente tomo: primero en este dispositivo; si no, en otro (p. ej. el PC desde el móvil)
+  nextFor(book) {
+    if (!book) return null;
+    const nb = this.nextBookOf(book);
+    if (nb) return { title: nb.title, where: 'local', open: () => this.openBook(nb.id) };
+    return this.ext?.nextRemote?.(book) || null;
   }
 
   pct(b) {
@@ -147,8 +157,9 @@ class App {
     else if (pct > 0) extra += `<div class="bar"><i style="width:${pct}%"></i></div>`;
     return `<div class="card" data-book="${b.id}" title="${esc(b.title)}">
       ${this.coverHTML(b.fp, b.title, extra)}
-      <div class="t">${esc(b.title)}</div>
-      <div class="s">${esc(sub ?? (p && !p.finished ? `Pág. ${p.page + 1} de ${p.total}` : b.pages ? `${b.pages} págs.` : b.ext.toUpperCase()))}</div>
+      <div class="meta"><div class="txt"><div class="t">${esc(b.title)}</div>
+      <div class="s">${esc(sub ?? (p && !p.finished ? `Pág. ${p.page + 1} de ${p.total}` : b.pages ? `${b.pages} págs.` : b.ext.toUpperCase()))}</div></div>
+      <button class="more" data-more-book="${b.id}" title="Más opciones" aria-label="Más opciones">${MORE}</button></div>
     </div>`;
   }
 
@@ -198,8 +209,9 @@ class App {
       const bar = pct > 0 ? `<div class="bar"><i style="width:${pct}%"></i></div>` : '';
       html += `<div class="card" data-series="${esc(name)}" data-book="${first.id}">
         ${this.coverHTML(first.fp, name, badge + bar)}
-        <div class="t">${esc(name)}</div>
-        <div class="s">${read ? `${read} de ${list.length} leídos` : `${list.length} volúmenes`}</div></div>`;
+        <div class="meta"><div class="txt"><div class="t">${esc(name)}</div>
+        <div class="s">${read ? `${read} de ${list.length} leídos` : `${list.length} volúmenes`}</div></div>
+        <button class="more" data-more-series="${esc(name)}" title="Más opciones" aria-label="Más opciones">${MORE}</button></div></div>`;
     }
     html += '</div>';
     if (!books.length) html += `<div class="empty"><h3>No hay archivos todavía</h3><p>Las carpetas vigiladas no contienen CBZ, CBR o PDF. En cuanto copies alguno, aparecerá aquí.</p></div>`;
@@ -374,6 +386,7 @@ class App {
     if (!box) return;
     const info = await window.porter.syncDevices();
     this.deviceCount = info.devices.length;
+    this.devices = info.devices;
     const ago = (t) => {
       if (!t) return 'nunca';
       const m = Math.round((Date.now() - t) / 60000);
@@ -425,31 +438,90 @@ class App {
       <div class="actions" style="justify-content:center"><button class="btn danger" data-sas="no" data-session="${esc(r.session)}">No coinciden</button><button class="btn" data-sas="yes" data-session="${esc(r.session)}">Coinciden</button></div>`;
   }
 
-  contextMenu(e, book) {
-    e.preventDefault();
+  // ---------- Menú de opciones (⋮ bajo la portada o clic derecho) ----------
+  openMenu(x, y, html, onPick) {
     const c = $('#ctx');
-    const p = this.state.progress[book.fp];
-    c.innerHTML = `<button data-c="open">Abrir</button>
-      ${p ? '<button data-c="reset">Marcar como no leído</button>' : ''}
-      ${!p?.finished ? '<button data-c="done">Marcar como leído</button>' : ''}
-      ${this.deviceCount ? '<button data-c="phone">Enviar al móvil</button>' : ''}
-      ${this.ext?.contextItems ? this.ext.contextItems(book) : '<button data-c="reveal">Mostrar en la carpeta</button>'}`;
-    c.style.left = Math.min(e.clientX, innerWidth - 200) + 'px';
-    c.style.top = Math.min(e.clientY, innerHeight - 150) + 'px';
+    c.innerHTML = html;
     c.hidden = false;
+    const r = c.getBoundingClientRect();
+    c.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+    c.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
     c.onclick = async (ev) => {
-      const a = ev.target.dataset.c; c.hidden = true;
-      if (a === 'open') this.openBook(book.id);
-      if (a === 'reveal') window.porter.reveal(book.id);
-      if (a === 'phone') { await window.porter.sendToPhone([book.fp]); this.toast('Se enviará al móvil la próxima vez que se sincronice'); }
-      if (this.ext?.contextAction) this.ext.contextAction(a, book);
-      if (a === 'reset') { this._keepScroll = true; this.setState(await window.porter.resetProgress(book.fp)); }
+      const btn = ev.target.closest('button[data-c]');
+      if (!btn || btn.disabled) return;
+      c.hidden = true;
+      await onPick(btn.dataset.c);
+    };
+  }
+
+  async bookMenu(book, x, y) {
+    const p = this.state.progress[book.fp];
+    let share = '';
+    if (this.ext?.shareItemsFor) share = this.ext.shareItemsFor(book);
+    else if (window.porter.syncDevices) {
+      const devs = this.devices || [];
+      share = devs.length
+        ? devs.map((d) => `<button data-c="share:${esc(d.id)}">📲 Compartir con ${esc(d.name)}</button>`).join('')
+        : '<button data-c="share-setup">📲 Compartir con otro dispositivo…</button>';
+    }
+    const html = `<button data-c="open">${p && !p.finished ? '▶ Continuar leyendo' : '▶ Leer'}</button>
+      ${!p?.finished ? '<button data-c="done">✓ Marcar como leído</button>' : ''}
+      ${p ? '<button data-c="reset">↺ Marcar como no leído</button>' : ''}
+      <hr>${share}
+      ${this.ext?.contextItems ? this.ext.contextItems(book) : '<button data-c="reveal">📁 Mostrar en la carpeta</button>'}`;
+    this.openMenu(x, y, html, async (a) => {
+      if (a === 'open') return this.openBook(book.id);
+      if (a === 'reveal') return window.porter.reveal(book.id);
+      if (a === 'reset') { this._keepScroll = true; return this.setState(await window.porter.resetProgress(book.fp)); }
       if (a === 'done') {
         const total = book.pages || 1;
         await window.porter.setProgress(book.id, total - 1, total);
-        this._keepScroll = true; this.setState(await window.porter.getLibrary());
+        this._keepScroll = true; return this.setState(await window.porter.getLibrary());
       }
-    };
+      if (a === 'share-setup') { this.toast('Empareja primero tu móvil o tablet para compartir mangas con él'); return this.pairDialog(); }
+      if (a.startsWith('share:')) {
+        const id = a.slice(6);
+        await window.porter.sendToPhone([book.fp], [id]);
+        const d = (this.devices || []).find((x) => x.id === id);
+        return this.toast(`Se enviará a ${d ? d.name : 'tu móvil'} en cuanto se sincronice (al abrir Porter en él)`);
+      }
+      if (this.ext?.contextAction) return this.ext.contextAction(a, book);
+    });
+  }
+
+  async seriesMenu(name, x, y) {
+    const list = this.seriesMap().get(name) || [];
+    let share = '';
+    if (this.ext?.shareSeriesItems) share = this.ext.shareSeriesItems(list);
+    else if (window.porter.syncDevices) {
+      const devs = this.devices || [];
+      share = devs.length
+        ? devs.map((d) => `<button data-c="share:${esc(d.id)}">📲 Compartir la serie con ${esc(d.name)}</button>`).join('')
+        : '<button data-c="share-setup">📲 Compartir con otro dispositivo…</button>';
+    }
+    const html = `<button data-c="open">📚 Abrir serie</button>
+      <button data-c="done">✓ Marcar serie como leída</button>
+      <button data-c="reset">↺ Marcar serie como no leída</button>
+      <hr>${share}`;
+    this.openMenu(x, y, html, async (a) => {
+      if (a === 'open') { this.series = name; this.render(); this.content.scrollTop = 0; return; }
+      if (a === 'done') {
+        for (const b of list) if (!this.state.progress[b.fp]?.finished) await window.porter.setProgress(b.id, (b.pages || 1) - 1, b.pages || 1);
+        this._keepScroll = true; return this.setState(await window.porter.getLibrary());
+      }
+      if (a === 'reset') {
+        for (const b of list) if (this.state.progress[b.fp]) await window.porter.resetProgress(b.fp);
+        this._keepScroll = true; return this.setState(await window.porter.getLibrary());
+      }
+      if (a === 'share-setup') { this.toast('Empareja primero tu móvil o tablet para compartir mangas con él'); return this.pairDialog(); }
+      if (a.startsWith('share:')) {
+        const id = a.slice(6);
+        await window.porter.sendToPhone(list.map((b) => b.fp), [id]);
+        const d = (this.devices || []).find((x) => x.id === id);
+        return this.toast(`${list.length} tomos se enviarán a ${d ? d.name : 'tu móvil'} en cuanto se sincronice`);
+      }
+      if (this.ext?.seriesAction) return this.ext.seriesAction(a, list);
+    });
   }
 
   bind() {
@@ -462,8 +534,18 @@ class App {
     $('#search').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { this.query = e.target.value; this.render(); }, 120); };
 
     document.addEventListener('click', async (e) => {
-      $('#ctx').hidden = true;
       const t = e.target;
+      const more = t.closest('[data-more-book], [data-more-series]');
+      if (more) {
+        e.stopPropagation();
+        const r = more.getBoundingClientRect();
+        if (!$('#ctx').hidden && this._menuFor === more) { $('#ctx').hidden = true; this._menuFor = null; return; }
+        this._menuFor = more;
+        if (more.dataset.moreBook) { const b = this.state.books[more.dataset.moreBook]; if (b) this.bookMenu(b, r.right - 220, r.bottom + 4); }
+        else this.seriesMenu(more.dataset.moreSeries, r.right - 220, r.bottom + 4);
+        return;
+      }
+      if (!t.closest('#ctx')) $('#ctx').hidden = true;
       const act = t.closest('[data-act]')?.dataset.act;
       if (act === 'add') { $('#modal').hidden = true; return this.addFolder(); }
       if (act === 'report') return this.reportDialog();
@@ -504,10 +586,11 @@ class App {
     });
 
     document.addEventListener('contextmenu', (e) => {
-      const card = e.target.closest('.card:not([data-series])');
+      const card = e.target.closest('.card');
       if (!card) return;
+      if (card.dataset.series) { e.preventDefault(); return this.seriesMenu(card.dataset.series, e.clientX, e.clientY); }
       const b = this.state.books[card.dataset.book];
-      if (b) this.contextMenu(e, b);
+      if (b) { e.preventDefault(); this.bookMenu(b, e.clientX, e.clientY); }
     });
 
     document.addEventListener('keydown', (e) => {

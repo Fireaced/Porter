@@ -76,10 +76,15 @@ Si no hay conexión, el reporte se guarda y se envía la próxima vez que abras 
 | F o F11 | Pantalla completa |
 | M | Cambiar modo (Manga → Normal → Vertical) |
 | D | Doble página |
+| R | Girar la página |
 | Ctrl + rueda, + / − / 0 | Zoom (arrastra para moverte) |
 | Esc | Salir |
 
 Clic en el tercio izquierdo/derecho de la pantalla para pasar página y en el centro para mostrar/ocultar las barras.
+
+- **Girar**: botón ⟳ de la barra superior o tecla **R** (Mayús+R gira al revés). Porter recuerda el giro de cada tomo.
+- **Siguiente tomo**: al llegar a la última página aparece «Siguiente tomo ›» abajo, y al terminar te ofrece abrir el siguiente de la serie. En el móvil, si el siguiente solo está en el PC, lo abre desde el PC y lo descarga.
+- **Menú ⋮** bajo cada portada (o clic derecho / pulsación larga): leer, marcar como leído o no leído, **compartir con otro dispositivo** (PC ↔ móvil) y mostrar en la carpeta o borrar del móvil. En las series, lo mismo para la serie entera. Lo que compartes desde el móvil llega al PC a la carpeta «Porter - Recibidos».
 
 ## Compilar desde el código
 Requiere [Node.js](https://nodejs.org) 20 o superior.

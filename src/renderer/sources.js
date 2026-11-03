@@ -43,11 +43,19 @@ function devicePixels(w, h, natW, natH) {
   return { pw, ph };
 }
 
-// Copia un bitmap ya decodificado a un <canvas> nuevo: mostrarlo no requiere más decodificación
-function canvasFrom(src, w, h, page) {
+// Copia un bitmap ya decodificado a un <canvas> nuevo, girado si hace falta (0/90/180/270).
+// w y h son el tamaño en pantalla ya girado.
+function canvasFrom(src, w, h, page, rot = 0) {
   const c = document.createElement('canvas');
-  c.width = src.width; c.height = src.height;
-  c.getContext('2d').drawImage(src, 0, 0);
+  const swap = rot % 180 !== 0;
+  c.width = swap ? src.height : src.width;
+  c.height = swap ? src.width : src.height;
+  const ctx = c.getContext('2d');
+  if (rot) {
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  } else ctx.drawImage(src, 0, 0);
   c.style.width = w + 'px'; c.style.height = h + 'px';
   c._page = page;
   return c;
@@ -106,11 +114,12 @@ export class ImageSource {
     return p;
   }
   // Devuelve un <canvas> nuevo con la página ya decodificada al tamaño pedido
-  async element(i, w, h) {
+  async element(i, w, h, rot = 0) {
     const d = await this.dims(i);
-    const { pw, ph } = devicePixels(w, h, d.w, d.h);
+    const [nw, nh] = rot % 180 ? [h, w] : [w, h];     // tamaño sin girar
+    const { pw, ph } = devicePixels(nw, nh, d.w, d.h);
     const bmp = await this.bitmap(i, pw, ph);
-    return canvasFrom(bmp, w, h, i);
+    return canvasFrom(bmp, w, h, i, rot);
   }
   // Modo vertical: <img> nuevo por página, usando los bytes precargados si existen
   freshElement(i) {
@@ -154,9 +163,10 @@ export class PdfSource {
     return d;
   }
   // Renderiza a la resolución exacta de pantalla (× devicePixelRatio): máxima nitidez
-  async element(i, w, h, useCache = true) {
+  async element(i, w, h, useCache = true, rot = 0) {
     const base0 = await this.dims(i);
-    const { pw, ph } = devicePixels(w, h, base0.w, base0.h);
+    const [nw, nh] = rot % 180 ? [h, w] : [w, h];
+    const { pw, ph } = devicePixels(nw, nh, base0.w, base0.h);
     const key = `${i}@${pw}x${ph}`;
     let p = useCache ? this.canvases.get(key) : null;
     if (!p) {
@@ -174,8 +184,8 @@ export class PdfSource {
       if (useCache) { this.canvases.set(key, p); p.catch(() => this.canvases.map.delete(key)); }
     }
     const master = await p;
-    if (!useCache) { master.style.width = w + 'px'; master.style.height = h + 'px'; return master; }
-    return canvasFrom(master, w, h, i);
+    if (!useCache && !rot) { master.style.width = w + 'px'; master.style.height = h + 'px'; return master; }
+    return canvasFrom(master, w, h, i, rot);
   }
   setBudget() {}
   warm(i) { if (i >= 0 && i < this.count) this.dims(i).catch(() => {}); }
