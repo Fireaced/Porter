@@ -1,0 +1,78 @@
+{
+  "name": "porter",
+  "version": "1.1.1",
+  "description": "Lector de manga, cómics y libros (CBZ, CBR, PDF)",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "author": {
+    "name": "Fireaced",
+    "url": "https://github.com/Fireaced"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "node-unrar-js": "^2.0.2",
+    "pdfjs-dist": "^4.10.38",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "pe-library": "^1.0.1",
+    "resedit": "^2.0.3"
+  },
+  "productName": "Porter",
+  "build": {
+    "appId": "io.github.fireaced.porter",
+    "productName": "Porter",
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "!node_modules/pdfjs-dist/legacy/**",
+      "!node_modules/pdfjs-dist/web/**",
+      "!node_modules/pdfjs-dist/types/**",
+      "!**/*.map",
+      "build/icon.png",
+      "LICENSE"
+    ],
+    "asarUnpack": [
+      "node_modules/node-unrar-js/**/*.wasm"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "compression": "normal",
+    "afterPack": "build/afterPack.js"
+  },
+  "copyright": "© 2026 Fireaced",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fireaced/Porter.git"
+  },
+  "homepage": "https://github.com/Fireaced/Porter",
+  "bugs": {
+    "url": "https://github.com/Fireaced/Porter/issues"
+  },
+  "keywords": [
+    "manga",
+    "comic",
+    "cbz",
+    "cbr",
+    "pdf",
+    "reader",
+    "electron",
+    "windows"
+  ]
+}
