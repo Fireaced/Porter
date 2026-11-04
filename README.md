@@ -35,7 +35,7 @@ Descarga el APK `Porter-x.y.z.apk` desde **[Releases](https://github.com/Fireace
 - **Misma interfaz y lector** que en el PC, con gestos: deslizar para pasar página (en modo manga, hacia la derecha), doble toque o pellizcar para hacer zoom y tocar en los laterales.
 - **Emparejado con el PC** (una sola vez): en el PC ve a **Ajustes → Emparejar un móvil o tablet** y en el móvil pulsa **Escanear QR**.
   - ¿Cámara rota o no lee el QR? Pulsa **Emparejar sin cámara**: el móvil busca tu PC en la Wi‑Fi (o escribes su dirección) y los dos muestran el mismo número de 6 cifras, que confirmas en el PC. También puedes **leer el QR de una foto**.
-- **Sincronización automática** cuando el móvil y el PC están en la misma Wi‑Fi: al abrir la app, al volver a ella y al cerrar un tomo se intercambian el progreso y el historial. Siempre gana la lectura más reciente.
+- **Sincronización automática** cuando el móvil y el PC están en la misma Wi‑Fi: al abrir la app, al volver a ella y al cerrar un tomo se intercambian el progreso, el historial y los marcadores. Siempre gana la lectura más reciente.
 - **«Leyendo en el PC»**: en el móvil ves lo que estás leyendo en el PC aunque no tengas el archivo, y puedes descargarlo o leerlo directamente desde el PC sin descargar.
 - **Pestaña PC**: toda la biblioteca del PC para descargar tomos o series enteras.
 - **Descargas automáticas**: Porter se trae del PC lo que estás leyendo y los siguientes tomos de la serie (configurable). Desde el PC también puedes hacer clic derecho → **Enviar al móvil**.
@@ -78,6 +78,8 @@ Si no hay conexión, el reporte se guarda y se envía la próxima vez que abras 
 | M | Cambiar modo (Manga → Normal → Vertical) |
 | D | Doble página |
 | R | Girar la página |
+| B | Poner o editar un marcador en la página |
+| L | Lista de marcadores del tomo |
 | Ctrl + rueda, + / − / 0 | Zoom (arrastra para moverte) |
 | Esc | Salir |
 
@@ -85,6 +87,7 @@ Clic en el tercio izquierdo/derecho de la pantalla para pasar página y en el ce
 
 - **Girar**: botón ⟳ de la barra superior o tecla **R** (Mayús+R gira al revés). Porter recuerda el giro de cada tomo.
 - **Siguiente tomo**: al llegar a la última página aparece «Siguiente tomo ›» abajo, y al terminar te ofrece abrir el siguiente de la serie. En el móvil, si el siguiente solo está en el PC, lo abre desde el PC y lo descarga.
+- **Marcadores**: botón 🔖 del lector (o tecla **B**) para marcar la página con uno de 12 colores y, si quieres, un nombre. Se ven como marcas en la barra de progreso (tócalas para saltar), como una cinta en la página, en el panel del tomo (botón ☰ o tecla **L**) y como cintas de colores en las portadas. La pestaña **Marcadores** los reúne todos, agrupados por serie, color o fecha, y se sincronizan entre el PC y el móvil.
 - **Menú ⋮** bajo cada portada (o clic derecho / pulsación larga): leer, marcar como leído o no leído, **compartir con otro dispositivo** (PC ↔ móvil) y mostrar en la carpeta o borrar del móvil. En las series, lo mismo para la serie entera. Lo que compartes desde el móvil llega al PC a la carpeta «Porter - Recibidos».
 
 ## Compilar desde el código
