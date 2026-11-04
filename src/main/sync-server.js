@@ -259,6 +259,10 @@ class SyncServer {
           if (b) e.path = b.path;
         }
         d.history = mh.history; d.historyDeleted = mh.deleted;
+        if (a.bookmarks) {
+          const mb = P.mergeBookmarks(d.bookmarks || {}, a.bookmarks, d.bookmarksDeleted || {}, a.bookmarksDeleted || {});
+          d.bookmarks = mb.bookmarks; d.bookmarksDeleted = mb.deleted;
+        }
         // Notas de lectura del PC en libros: actualizar páginas
         this.store.save();
         this.onChange?.();
@@ -267,6 +271,8 @@ class SyncServer {
           progress: d.progress,
           history: P.shareableHistory(d.history),
           deleted: d.historyDeleted,
+          bookmarks: d.bookmarks || {},
+          bookmarksDeleted: d.bookmarksDeleted || {},
           send: this.suggestions(dev, new Set(a.localBooks || []), Math.max(0, Math.min(10, a.autoNext ?? 2))),
           onPc: Object.values(d.books).map((b) => b.fp),
         });

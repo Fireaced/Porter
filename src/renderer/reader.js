@@ -1,4 +1,5 @@
 import { ImageSource, PdfSource } from './sources.js';
+import { ReaderBookmarks } from './bookmarks.js';
 
 const $ = (s) => document.querySelector(s);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -14,11 +15,12 @@ export class Reader {
     this.zoom = 1;
     this.idx = 0;
     this.spread = [0];
+    this.bm = new ReaderBookmarks(this);
     this._bind();
   }
 
   // ---------- Apertura / cierre ----------
-  async open(bookId) {
+  async open(bookId, opts = {}) {
     this.closeEnd();
     const info = await window.porter.openBook(bookId);
     const { book } = info;
@@ -48,12 +50,13 @@ export class Reader {
     if (book.ext === 'pdf') window.porter.setPages(book.id, this.total);
 
     const p = info.progress;
-    let start = p && !p.finished ? clamp(p.page, 0, this.total - 1) : 0;
+    let start = opts.page != null ? clamp(opts.page, 0, this.total - 1) : p && !p.finished ? clamp(p.page, 0, this.total - 1) : 0;
     this.slider.max = String(this.total - 1);
     this.syncControls();
     this.stage.focus();
     this.showChrome();
     await this.layout(start, true);
+    this.bm.refresh();
   }
 
   close() {
@@ -68,6 +71,7 @@ export class Reader {
     this.src = null; this.book = null;
     this.el.hidden = true;
     this.closeEnd();
+    this.bm.reset();
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     window.porter.fullscreen(false);
     this.app.onReaderClosed();
@@ -464,6 +468,7 @@ export class Reader {
       nb.hidden = !next;
       if (next) nb.textContent = 'Siguiente tomo ›';
     }
+    this.bm?.refresh();
   }
 
   // ---------- Girar ----------
@@ -486,6 +491,7 @@ export class Reader {
     $('#r-shift').classList.toggle('on', this.shift);
     $('#r-shift').disabled = this.mode === 'vertical' || !this.double;
     this.slider.classList.toggle('rtl', this.mode === 'manga');
+    this.bm?.refresh();
     const rb = $('#r-rotate');
     if (rb) { rb.classList.toggle('on', !!this.rotation); rb.title = `Girar (R)${this.rotation ? ' · ' + this.rotation + '°' : ''}`; }
   }
@@ -576,13 +582,15 @@ export class Reader {
     $('#r-full').onclick = () => window.porter.fullscreen();
     if ($('#r-rotate')) $('#r-rotate').onclick = () => this.rotate(90);
     if ($('#r-next')) $('#r-next').onclick = () => this.goNextBook();
+    $('#r-bm').onclick = () => this.bm.toggle();
+    $('#r-bmlist').onclick = () => this.bm.togglePanel();
     $('#r-double').onclick = () => this.setDouble(!this.double);
     $('#r-shift').onclick = async () => { this.shift = !this.shift; this.syncControls(); this.invalidate(); this.go(await this.alignPage(this.spread[0])); };
     document.querySelectorAll('#r-mode button').forEach((b) => b.onclick = () => this.setMode(b.dataset.mode));
     document.querySelectorAll('#r-fit button').forEach((b) => b.onclick = () => this.setFit(b.dataset.fit));
     this.slider.oninput = () => { $('#r-count').textContent = `${+this.slider.value + 1} / ${this.total}`; };
     this.slider.onchange = () => this.jump(+this.slider.value);
-    for (const id of ['#r-top', '#r-bottom']) {
+    for (const id of ['#r-top', '#r-bottom', '#r-bmpanel', '#r-bmpop']) {
       const bar = $(id);
       bar.addEventListener('mouseenter', () => { this._hover = true; this.showChrome(); });
       bar.addEventListener('mouseleave', () => { this._hover = false; this.showChrome(); });
@@ -677,6 +685,7 @@ export class Reader {
         return;
       }
       if (!e.target.closest?.('#stage')) return;
+      if (this.bm.popOpen) { this.bm.closePop(); return; }
       const x = e.clientX / window.innerWidth;
       const act = () => {
         if (this.mode === 'vertical') { if (x > 0.3 && x < 0.7) this.toggleChrome(); return; }
@@ -741,11 +750,15 @@ export class Reader {
         case 'm': case 'M': this.setMode({ manga: 'ltr', ltr: 'vertical', vertical: 'manga' }[this.mode]); break;
         case 'd': case 'D': if (!vert) this.setDouble(!this.double); break;
         case 'r': case 'R': this.rotate(e.shiftKey ? -90 : 90); break;
+        case 'b': case 'B': this.bm.toggle(); break;
+        case 'l': case 'L': this.bm.togglePanel(); break;
         case '+': case '=': this.rezoom(this.zoom * 1.2); break;
         case '-': this.rezoom(this.zoom / 1.2); break;
         case '0': this.rezoom(1); break;
         case 'Escape':
-          if (endOpen) this.closeEnd();
+          if (this.bm.popOpen) this.bm.closePop();
+          else if (!this.bm.panel.hidden) this.bm.togglePanel(false);
+          else if (endOpen) this.closeEnd();
           else if (this.isFull) window.porter.fullscreen(false);
           else this.close();
           break;

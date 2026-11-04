@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('porter', {
   resetProgress: call('progress:reset'),
   removeHistory: call('history:remove'),
   clearHistory: call('history:clear'),
+  saveBookmark: call('bookmark:save'),
+  removeBookmark: call('bookmark:remove'),
   hasCover: call('cover:has'),
   saveCover: call('cover:save'),
   setSettings: call('settings:set'),

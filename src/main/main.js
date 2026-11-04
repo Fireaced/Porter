@@ -34,7 +34,7 @@ const send = (ch, data) => win && !win.isDestroyed() && win.webContents.send(ch,
 
 function snapshot() {
   const d = store.data;
-  return { books: d.books, progress: d.progress, history: d.history, settings: d.settings, folders: d.folders, covers: [...coverSet] };
+  return { books: d.books, progress: d.progress, history: d.history, bookmarks: d.bookmarks || {}, settings: d.settings, folders: d.folders, covers: [...coverSet] };
 }
 const coverSet = new Set();
 
@@ -141,6 +141,17 @@ function touchHistory(book, page, total) {
   store.data.history[book.fp] = h;
 }
 
+function cleanBookmark(bm) {
+  if (!bm || typeof bm !== 'object' || !/^[a-z0-9]{6,40}$/i.test(String(bm.id || '')) || !bm.fp) return null;
+  const thumb = typeof bm.thumb === 'string' && bm.thumb.startsWith('data:image/') && bm.thumb.length < 60000 ? bm.thumb : undefined;
+  return {
+    id: String(bm.id), fp: String(bm.fp).slice(0, 40), page: Math.max(0, Math.floor(+bm.page || 0)), total: Math.max(0, Math.floor(+bm.total || 0)),
+    color: Math.max(0, Math.min(11, Math.floor(+bm.color || 0))), name: String(bm.name || '').slice(0, 80),
+    title: String(bm.title || '').slice(0, 200), series: String(bm.series || '').slice(0, 200), ext: String(bm.ext || '').slice(0, 8),
+    thumb, created: +bm.created || Date.now(), updated: Date.now(),
+  };
+}
+
 function registerIpc() {
   ipcMain.handle('library:get', () => snapshot());
 
@@ -206,6 +217,24 @@ function registerIpc() {
     store.data.historyDeleted = { ...(store.data.historyDeleted || {}) };
     for (const fp of Object.keys(store.data.history)) store.data.historyDeleted[fp] = now;
     store.data.history = {}; store.save(); return snapshot();
+  });
+
+  // Marcadores
+  ipcMain.handle('bookmark:save', (_e, bm) => {
+    const d = store.data;
+    const clean = cleanBookmark(bm);
+    if (!clean) return snapshot();
+    d.bookmarks = { ...(d.bookmarks || {}), [clean.id]: clean };
+    store.save(); return snapshot();
+  });
+  ipcMain.handle('bookmark:remove', (_e, id) => {
+    const d = store.data;
+    if (d.bookmarks?.[id]) {
+      delete d.bookmarks[id];
+      d.bookmarksDeleted = { ...(d.bookmarksDeleted || {}), [id]: Date.now() };
+      store.save();
+    }
+    return snapshot();
   });
 
   // Móviles y tablets

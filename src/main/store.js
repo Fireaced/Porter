@@ -10,6 +10,8 @@ const DEFAULTS = () => ({
   books: {},            // id -> libro
   progress: {},         // fingerprint -> { page, total, updated, finished }
   history: {},          // fingerprint -> entrada de historial (sobrevive al archivo)
+  bookmarks: {},        // id -> marcador { fp, page, color, name, thumb, title, series… }
+  bookmarksDeleted: {}, // id -> fecha de borrado (para sincronizar)
   settings: {
     readMode: 'manga',  // manga | ltr | vertical
     doublePage: false,

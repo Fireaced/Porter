@@ -1,5 +1,6 @@
 import { Reader } from './reader.js';
 import { makeCover } from './sources.js';
+import { BM_COLORS, bmHex, bmLabel, bookmarksOf, ribbonsHTML, editorHTML, bindEditor } from './bookmarks.js';
 
 const $ = (s) => document.querySelector(s);
 const collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
@@ -12,6 +13,8 @@ class App {
     this.view = 'library';
     this.series = null;      // serie abierta
     this.query = '';
+    this.bmGroup = 'series';   // agrupar marcadores por: series | color | date
+    this.bmColor = null;       // filtro de color en la pestaña Marcadores
     this.covers = new Set();
     this.coverQueue = [];
     this.coverBusy = 0;
@@ -137,6 +140,7 @@ class App {
     document.body.dataset.view = this.view;
     const scroll = this.content.scrollTop;
     if (this.view === 'history') this.renderHistory();
+    else if (this.view === 'bookmarks') this.renderBookmarks();
     else if (this.view !== 'library' && this.ext?.renderView) this.ext.renderView(this.view);
     else if (this.series) this.renderSeries(this.series);
     else this.renderLibrary();
@@ -153,6 +157,7 @@ class App {
     const p = this.state.progress[b.fp];
     const pct = this.pct(b);
     let extra = '';
+    extra += ribbonsHTML(bookmarksOf(this.state, b.fp));
     if (p?.finished) extra += `<span class="badge done">✓ Leído</span>`;
     else if (pct > 0) extra += `<div class="bar"><i style="width:${pct}%"></i></div>`;
     return `<div class="card" data-book="${b.id}" title="${esc(b.title)}">
@@ -204,7 +209,8 @@ class App {
       const read = list.filter((b) => this.state.progress[b.fp]?.finished).length;
       const first = list.find((b) => this.covers.has(b.fp)) || list[0];
       if (list.length === 1) { html += this.bookCard(list[0], list[0].series !== list[0].title ? list[0].series : undefined); continue; }
-      const badge = `<span class="badge count">${list.length}</span>`;
+      const fps = new Set(list.map((b) => b.fp));
+      const badge = `<span class="badge count">${list.length}</span>` + ribbonsHTML(Object.values(this.state.bookmarks || {}).filter((m) => fps.has(m.fp)));
       const pct = Math.round((read / list.length) * 100);
       const bar = pct > 0 ? `<div class="bar"><i style="width:${pct}%"></i></div>` : '';
       html += `<div class="card" data-series="${esc(name)}" data-book="${first.id}">
@@ -265,10 +271,87 @@ class App {
     this.content.innerHTML = html + '</div>';
   }
 
+  // ---------- Marcadores ----------
+  renderBookmarks() {
+    const q = this.query.trim().toLowerCase();
+    const all = Object.values(this.state.bookmarks || {});
+    if (!all.length) {
+      this.content.innerHTML = `<div class="empty"><h3>Sin marcadores</h3><p>Mientras lees, pulsa <b>🔖</b> en la barra de arriba (o la tecla B) para marcar una página con un color y, si quieres, un nombre. Aquí verás todos tus marcadores.</p></div>`;
+      return;
+    }
+    let items = all;
+    if (this.bmColor != null) items = items.filter((b) => b.color === this.bmColor);
+    if (q) items = items.filter((b) => `${b.name} ${b.title} ${b.series}`.toLowerCase().includes(q));
+    const used = [...new Set(all.map((b) => b.color))].sort((a, b) => a - b);
+    const byFp = new Map(this.booksArr().map((b) => [b.fp, b]));
+    let html = `<div class="section-h bm-head"><h2>Marcadores</h2><span class="meta">${items.length}${items.length !== all.length ? ` de ${all.length}` : ''}</span>
+      <div class="seg" style="margin-left:auto">${[['series', 'Serie'], ['color', 'Color'], ['date', 'Fecha']].map(([k, l]) => `<button data-bmgroup="${k}" class="${this.bmGroup === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="bm-filter"><button class="chip ${this.bmColor == null ? 'on' : ''}" data-bmfilter="all">Todos</button>${used.map((c) => `<button class="bm-sw small ${this.bmColor === c ? 'on' : ''}" data-bmfilter="${c}" style="--c:${bmHex(c)}" title="${BM_COLORS[c].name}"></button>`).join('')}</div>`;
+    const groups = new Map();
+    const add = (k, label, b) => { if (!groups.has(k)) groups.set(k, { label, list: [] }); groups.get(k).list.push(b); };
+    if (this.bmGroup === 'color') {
+      items.sort((a, b) => a.color - b.color || (b.updated || 0) - (a.updated || 0));
+      for (const b of items) add(b.color, BM_COLORS[b.color]?.name || '', b);
+    } else if (this.bmGroup === 'date') {
+      const dayKey = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+      const today = dayKey(Date.now());
+      items.sort((a, b) => (b.created || 0) - (a.created || 0));
+      for (const b of items) {
+        const k = dayKey(b.created || 0);
+        add(k, k === today ? 'Hoy' : k === today - 864e5 ? 'Ayer' : new Date(k).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }), b);
+      }
+    } else {
+      items.sort((a, b) => collator.compare(a.series || a.title, b.series || b.title) || collator.compare(a.title, b.title) || a.page - b.page);
+      for (const b of items) add(b.series || b.title, b.series || b.title, b);
+    }
+    if (!items.length) html += `<p style="color:var(--muted)">Ningún marcador coincide.</p>`;
+    for (const [k, g] of groups) {
+      const dot = this.bmGroup === 'color' ? `<i class="bm-dot" style="--c:${bmHex(k)}"></i>` : '';
+      html += `<div class="bm-group-h">${dot}${esc(g.label)}<span>${g.list.length}</span></div><div class="grid bm-grid">`;
+      for (const b of g.list) {
+        const book = byFp.get(b.fp);
+        const remote = !book && this.ext?.isRemote?.(b.fp);
+        const where = book ? `data-bm-open="${b.id}"` : remote ? `data-remote="${b.fp}"` : `data-bm-gone="${b.id}"`;
+        const img = b.thumb ? `<img alt="" loading="lazy" src="${b.thumb}">` : this.covers.has(b.fp) ? `<img alt="" loading="lazy" src="${this.coverURL(b.fp)}">` : `<div class="ph">${esc(b.title)}</div>`;
+        html += `<div class="card bm-card ${!book && !remote ? 'gone' : ''}" ${where}>
+          <div class="cover">${img}<div class="bm-ribbons"><i style="--c:${bmHex(b.color)}"></i></div><span class="badge">Pág. ${b.page + 1}</span>${!book ? `<span class="badge ${remote ? 'pc' : 'gone'} bl">${remote ? 'PC' : 'No disponible'}</span>` : ''}</div>
+          <div class="meta"><div class="txt"><div class="t">${esc(bmLabel(b))}</div><div class="s">${esc(b.title)}</div></div>
+          <button class="more" data-more-bm="${b.id}" title="Más opciones" aria-label="Más opciones">${MORE}</button></div></div>`;
+      }
+      html += '</div>';
+    }
+    this.content.innerHTML = html;
+  }
+
+  bookmarkDialog(bm) {
+    const m = $('#modal');
+    m.innerHTML = `<div class="dialog bm-dialog"><p class="bm-dlg-t">${esc(bm.title)}</p>${editorHTML(bm, 'Editar marcador')}</div>`;
+    m.hidden = false;
+    let cur = { ...bm };
+    bindEditor(m, bm, {
+      save: async (patch) => { cur = { ...cur, ...patch }; this._keepScroll = true; this.setState(await window.porter.saveBookmark(cur)); },
+      del: async () => { m.hidden = true; this._keepScroll = true; this.setState(await window.porter.removeBookmark(cur.id)); this.toast('Marcador eliminado'); },
+      done: () => { m.hidden = true; },
+    });
+    setTimeout(() => m.querySelector('.bm-name')?.focus(), 0);
+  }
+
+  bookmarkMenu(bm, x, y) {
+    const book = this.booksArr().find((b) => b.fp === bm.fp);
+    const html = `${book ? '<button data-c="open">▶ Abrir en esta página</button>' : ''}
+      <button data-c="edit">✎ Cambiar color o nombre</button>
+      <button data-c="del">🗑 Eliminar marcador</button>`;
+    this.openMenu(x, y, html, async (a) => {
+      if (a === 'open') return this.openBook(book.id, bm.page);
+      if (a === 'edit') return this.bookmarkDialog(bm);
+      if (a === 'del') { this._keepScroll = true; this.setState(await window.porter.removeBookmark(bm.id)); this.toast('Marcador eliminado'); }
+    });
+  }
+
   // ---------- Acciones ----------
-  async openBook(id) {
+  async openBook(id, page) {
     try {
-      await this.reader.open(id);
+      await this.reader.open(id, page != null ? { page } : {});
     } catch (e) {
       this.toast(e.message?.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') || 'No se pudo abrir');
       this.setState(await window.porter.getLibrary());
@@ -535,13 +618,14 @@ class App {
 
     document.addEventListener('click', async (e) => {
       const t = e.target;
-      const more = t.closest('[data-more-book], [data-more-series]');
+      const more = t.closest('[data-more-book], [data-more-series], [data-more-bm]');
       if (more) {
         e.stopPropagation();
         const r = more.getBoundingClientRect();
         if (!$('#ctx').hidden && this._menuFor === more) { $('#ctx').hidden = true; this._menuFor = null; return; }
         this._menuFor = more;
-        if (more.dataset.moreBook) { const b = this.state.books[more.dataset.moreBook]; if (b) this.bookMenu(b, r.right - 220, r.bottom + 4); }
+        if (more.dataset.moreBm) { const bm = this.state.bookmarks?.[more.dataset.moreBm]; if (bm) this.bookmarkMenu(bm, r.right - 220, r.bottom + 4); }
+        else if (more.dataset.moreBook) { const b = this.state.books[more.dataset.moreBook]; if (b) this.bookMenu(b, r.right - 220, r.bottom + 4); }
         else this.seriesMenu(more.dataset.moreSeries, r.right - 220, r.bottom + 4);
         return;
       }
@@ -560,6 +644,17 @@ class App {
       }
       const rmd = t.closest('[data-rmdevice]')?.dataset.rmdevice;
       if (rmd) { if (confirm('¿Desemparejar este dispositivo? Tendrás que volver a emparejarlo para sincronizar.')) { await window.porter.removeDevice(rmd); this.renderDevices(); } return; }
+      const bmg = t.closest('[data-bmgroup]')?.dataset.bmgroup;
+      if (bmg) { this.bmGroup = bmg; return this.render(); }
+      const bmf = t.closest('[data-bmfilter]')?.dataset.bmfilter;
+      if (bmf) { this.bmColor = bmf === 'all' || +bmf === this.bmColor ? null : +bmf; this._keepScroll = true; return this.render(); }
+      const bmo = t.closest('[data-bm-open]')?.dataset.bmOpen;
+      if (bmo) {
+        const bm = this.state.bookmarks?.[bmo];
+        const book = bm && this.booksArr().find((b) => b.fp === bm.fp);
+        if (book) return this.openBook(book.id, bm.page);
+      }
+      if (t.closest('[data-bm-gone]')) return this.toast('El archivo de este marcador ya no está en la biblioteca. El marcador se conserva.');
       if (this.ext?.action && await this.ext.action(act, t, e)) return;
       if (act === 'back') { this.series = null; this.render(); return; }
       if (act === 'rescan') { this.toast('Escaneando…'); this.setState(await window.porter.rescan()); this.toast('Biblioteca actualizada'); return this.settings(); }
@@ -588,6 +683,8 @@ class App {
     document.addEventListener('contextmenu', (e) => {
       const card = e.target.closest('.card');
       if (!card) return;
+      const bmc = card.querySelector('[data-more-bm]')?.dataset.moreBm;
+      if (bmc) { e.preventDefault(); const bm = this.state.bookmarks?.[bmc]; if (bm) this.bookmarkMenu(bm, e.clientX, e.clientY); return; }
       if (card.dataset.series) { e.preventDefault(); return this.seriesMenu(card.dataset.series, e.clientX, e.clientY); }
       const b = this.state.books[card.dataset.book];
       if (b) { e.preventDefault(); this.bookMenu(b, e.clientX, e.clientY); }

@@ -1,6 +1,6 @@
 // Sincronización automática con el PC y descargas de mangas.
 import { PcClient } from '../../src/shared/pc-client.mjs';
-import { mergeProgress, mergeHistory, shareableHistory } from '../../src/shared/proto.mjs';
+import { mergeProgress, mergeHistory, shareableHistory, mergeBookmarks } from '../../src/shared/proto.mjs';
 import { zipSync } from 'fflate';
 import { createTarget, openHandle } from './files.js';
 import { store, writeBytes, addLocalBook, deleteLocalBook, saveCoverBytes, extOfMime, remote, readBlob, b64FromBytes, rekeyBook } from './bridge.js';
@@ -89,6 +89,8 @@ export class SyncEngine {
       progress: d.progress,
       history: shareableHistory(d.history),
       deleted: d.historyDeleted,
+      bookmarks: d.bookmarks,
+      bookmarksDeleted: d.bookmarksDeleted,
       localBooks: Object.keys(d.books),
       autoNext: d.autoNext,
     }, 30000);
@@ -96,6 +98,10 @@ export class SyncEngine {
     const mh = mergeHistory(d.history, res.history, d.historyDeleted, res.deleted);
     for (const [fp, e] of Object.entries(mh.history)) e.available = !!d.books[fp];
     d.history = mh.history; d.historyDeleted = mh.deleted;
+    if (res.bookmarks) {
+      const mb = mergeBookmarks(d.bookmarks, res.bookmarks, d.bookmarksDeleted, res.bookmarksDeleted);
+      d.bookmarks = mb.bookmarks; d.bookmarksDeleted = mb.deleted;
+    }
     d.onPc[pc.id] = res.onPc || [];
     pc.name = res.pcName || pc.name;
     pc.lastSync = Date.now();

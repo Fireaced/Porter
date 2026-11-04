@@ -184,3 +184,21 @@ export function shareableHistory(h = {}) {
   }
   return out;
 }
+
+// Marcadores: se unen por id; gana la versión editada más tarde y los borrados (lápidas) mandan
+// si son posteriores a la última edición.
+export function mergeBookmarks(local = {}, remote = {}, localDel = {}, remoteDel = {}) {
+  const deleted = { ...localDel };
+  for (const [id, t] of Object.entries(remoteDel || {})) deleted[id] = Math.max(deleted[id] || 0, t);
+  const out = {};
+  for (const id of new Set([...Object.keys(local || {}), ...Object.keys(remote || {})])) {
+    const l = local?.[id], r = remote?.[id];
+    const m = l && r ? ((r.updated || 0) > (l.updated || 0) ? r : l) : (l || r);
+    if (!m || typeof m !== 'object' || !m.fp) continue;
+    if (deleted[id] && (m.updated || 0) <= deleted[id]) continue;
+    out[id] = m;
+  }
+  const limit = Date.now() - 180 * 864e5;
+  for (const [id, t] of Object.entries(deleted)) if (t < limit) delete deleted[id];
+  return { bookmarks: out, deleted };
+}

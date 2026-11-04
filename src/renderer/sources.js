@@ -142,6 +142,14 @@ export class ImageSource {
     }).catch(() => { img.src = this.url(i); });
     return img;
   }
+  // Miniatura pequeña (para marcadores), sin tocar las cachés del lector
+  async thumb(i, rot = 0, maxW = 150) {
+    const d = await this.dims(i);
+    const w = maxW, h = Math.min(260, Math.round(maxW * d.h / d.w));
+    const bmp = await createImageBitmap(await this.blob(i), { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
+    const c = canvasFrom(bmp, w, h, i, rot); bmp.close();
+    return c.toDataURL('image/jpeg', 0.72);
+  }
   warm(i) { if (i >= 0 && i < this.count) this.blob(i).catch(() => {}); }
   prefetch(i) { if (i >= 0 && i < this.count) this.dims(i).catch(() => {}); }
   release() { this.bitmaps.clear(); this.blobs.clear(); }
@@ -201,6 +209,17 @@ export class PdfSource {
   setBudget() {}
   warm(i) { if (i >= 0 && i < this.count) this.dims(i).catch(() => {}); }
   prefetch(i) { if (i >= 0 && i < this.count) this.dims(i).catch(() => {}); }
+  async thumb(i, rot = 0, maxW = 150) {
+    const page = await this.page(i);
+    const base = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: maxW / base.width });
+    const c = document.createElement('canvas');
+    c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+    const ctx = c.getContext('2d', { alpha: false });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp, intent: 'display' }).promise;
+    return (rot ? canvasFrom(c, c.width, c.height, i, rot) : c).toDataURL('image/jpeg', 0.72);
+  }
   release() { this.canvases.clear(); this.doc.destroy(); }
 }
 

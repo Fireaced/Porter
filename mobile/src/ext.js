@@ -348,6 +348,8 @@ export function createExt(app) {
       if (window.__porterScannerClose && document.querySelector('.scanner')) return window.__porterScannerClose();
       if (!$('#modal').hidden) { scanAbort?.abort(); $('#modal').hidden = true; return; }
       if (!$('#ctx').hidden) { $('#ctx').hidden = true; return; }
+      if (app.reader.isOpen && app.reader.bm?.popOpen) return app.reader.bm.closePop();
+      if (app.reader.isOpen && app.reader.bm && !app.reader.bm.panel.hidden) return app.reader.bm.togglePanel(false);
       if (app.reader.isOpen) return app.reader.close();
       if (app.view === 'pc' && pcSeries) { pcSeries = null; return renderPc(); }
       if (app.series) { app.series = null; return app.render(); }

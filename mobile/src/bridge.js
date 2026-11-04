@@ -16,6 +16,8 @@ const DEFAULTS = () => ({
   progress: {},
   history: {},
   historyDeleted: {},
+  bookmarks: {},       // id -> marcador
+  bookmarksDeleted: {},
   settings: { readMode: 'manga', doublePage: false, fit: 'height', seriesMode: {}, preload: 10 },
   pcs: {},             // PCs emparejados
   device: null,        // { id, name }
@@ -101,7 +103,7 @@ export const remote = { open: new Map(), client: null };  // libros abiertos en 
 
 function snapshot() {
   const d = store.data;
-  return { books: d.books, progress: d.progress, history: d.history, settings: d.settings, folders: [], covers: [...coverUrls.keys()] };
+  return { books: d.books, progress: d.progress, history: d.history, bookmarks: d.bookmarks, settings: d.settings, folders: [], covers: [...coverUrls.keys()] };
 }
 
 async function loadCovers() {
@@ -298,6 +300,15 @@ const api = {
     for (const fp of Object.keys(store.data.history)) store.data.historyDeleted[fp] = now;
     store.data.history = {};
     store.save(); return snapshot();
+  },
+  saveBookmark: async (bm) => {
+    if (!bm?.id || !bm.fp) return snapshot();
+    store.data.bookmarks[bm.id] = { ...bm, color: Math.max(0, Math.min(11, bm.color | 0)), name: String(bm.name || '').slice(0, 80), updated: Date.now(), created: bm.created || Date.now() };
+    store.save(); return snapshot();
+  },
+  removeBookmark: async (id) => {
+    if (store.data.bookmarks[id]) { delete store.data.bookmarks[id]; store.data.bookmarksDeleted[id] = Date.now(); store.save(); }
+    return snapshot();
   },
   hasCover: async (fp) => coverUrls.has(fp),
   saveCover: async (fp, buf) => { await saveCoverBytes(fp, new Uint8Array(buf)); return true; },
